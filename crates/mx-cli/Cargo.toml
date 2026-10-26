@@ -1,0 +1,16 @@
+[package]
+name = "mx-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mx"
+path = "src/main.rs"
+
+[dependencies]
+mx-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+indicatif.workspace = true
+serde_json.workspace = true
+ctrlc.workspace = true
