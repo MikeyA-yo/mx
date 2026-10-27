@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mx_core::ffmpeg::ops::Aspect;
 use mx_core::units;
+use mx_core::ytdlp::Container;
 
 #[derive(Parser)]
 #[command(name = "mx", version, about = "Media extractor and processor built on yt-dlp + ffmpeg")]
@@ -70,6 +71,15 @@ pub enum Command {
         output: PathBuf,
         #[command(flatten)]
         encode: EncodeArgs,
+    },
+    /// Change the container without re-encoding: lossless and near-instant
+    Remux {
+        input: PathBuf,
+        /// Output file [default: input name with the --to extension]
+        output: Option<PathBuf>,
+        /// Container to use when no output file is given
+        #[arg(short, long, value_enum, default_value_t = ContainerArg::Mp4, conflicts_with = "output")]
+        to: ContainerArg,
     },
     /// Cut a time range (frame-exact by default, --fast for instant keyframe cuts)
     Trim {
@@ -176,6 +186,10 @@ pub struct DownloadArgs {
     #[arg(long, conflicts_with_all = ["audio_only", "format"])]
     pub compat: bool,
 
+    /// Save in this container (lossless remux, no re-encoding)
+    #[arg(long, value_enum, conflicts_with = "audio_only")]
+    pub container: Option<ContainerArg>,
+
     /// Download the whole playlist when the URL points into one
     #[arg(long)]
     pub playlist: bool,
@@ -210,6 +224,24 @@ pub enum CodecArg {
     H264,
     Hevc,
     Av1,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ContainerArg {
+    Mp4,
+    Mkv,
+    /// VP9/AV1 + Opus only
+    Webm,
+}
+
+impl ContainerArg {
+    pub fn core(self) -> Container {
+        match self {
+            Self::Mp4 => Container::Mp4,
+            Self::Mkv => Container::Mkv,
+            Self::Webm => Container::Webm,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]

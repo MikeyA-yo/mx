@@ -1,4 +1,4 @@
-//! Local processing commands: convert, trim, reframe, compress, speed, gif.
+//! Local processing commands: convert, remux, trim, reframe, compress, speed, gif.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -8,7 +8,7 @@ use indicatif::{DecimalBytes, HumanBytes, ProgressBar};
 
 use crate::cli::{CodecArg, Command, CompressCodecArg, EncodeArgs, FitArg};
 use crate::{bar_style, display};
-use mx_core::CancelToken;
+use mx_core::{CancelToken, Cancelled};
 use mx_core::ffmpeg::ops::{self, CompressCodec, Cut, Fit, GifOptions, VideoEncode};
 use mx_core::ffmpeg::{self, Job, Progress, encoders, encoders::Codec, encoders::Encoder};
 use mx_core::units::format_time;
@@ -27,6 +27,29 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
             let video = resolve_encoder(&encode)?;
             let job = ops::transcode(&input, &output, video);
             finish(&input, &output, || run_job(ctx, "convert", job))
+        }
+        Command::Remux { input, output, to } => {
+            let output = output.unwrap_or_else(|| input.with_extension(to.core().ext()));
+            check_output(&output, ctx)?;
+            let remux = ops::remux(&input, &output)?;
+            let subs = &remux.subtitles;
+            if subs.converted > 0 {
+                println!("subtitles  {} text track(s) converted for this container", subs.converted);
+            }
+            if !subs.dropped.is_empty() {
+                println!(
+                    "note: left out {} subtitle track(s) ({}) this container can't hold; remux to .mkv to keep them",
+                    subs.dropped.len(),
+                    subs.dropped.join(", ")
+                );
+            }
+            finish(&input, &output, || run_job(ctx, "remux", remux.job)).map_err(|e| {
+                if e.is::<Cancelled>() {
+                    e
+                } else {
+                    e.context("remux failed; .mkv holds almost any codec, or `mx convert` re-encodes into this one")
+                }
+            })
         }
         Command::Trim { input, output, from, to, length, fast, encode } => {
             check_output(&output, ctx)?;

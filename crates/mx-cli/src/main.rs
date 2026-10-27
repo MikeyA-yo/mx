@@ -100,6 +100,7 @@ fn download(yt: &YtDlp, args: DownloadArgs, cancel: &CancelToken) -> Result<()> 
         selection,
         playlist: args.playlist,
         compat: args.compat,
+        container: args.container.map(|c| c.core()),
         info_json: args.info_json,
     };
 

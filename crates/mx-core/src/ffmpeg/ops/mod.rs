@@ -7,12 +7,14 @@
 mod compress;
 mod gif;
 mod reframe;
+mod remux;
 mod speed;
 mod trim;
 
 pub use compress::{Compress, CompressCodec, CompressOutcome, CompressPlan, compress, plan_compression};
 pub use gif::{GifOptions, gif};
 pub use reframe::{Aspect, Fit, reframe};
+pub use remux::{Remux, SubtitlePlan, remux, remux_with};
 pub use speed::speed;
 pub use trim::{Cut, Trim, trim};
 

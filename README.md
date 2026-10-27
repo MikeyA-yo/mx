@@ -28,6 +28,7 @@ mx formats <url>                 # every format: resolution, codec, bitrate, siz
 mx download <url>                # best quality -> mp4, or mkv if codecs need it
 mx download <url> -q 720         # cap at 720p
 mx download <url> --compat       # prefer H.264/AAC mp4 (editor-friendly)
+mx download <url> --container mp4  # same streams, mp4 file (mp4 | mkv | webm)
 mx download <url> -x --audio-format mp3
 mx download <url> -f 137+140     # exact formats from `mx formats`
 mx download <url> --playlist --info-json
@@ -38,6 +39,10 @@ mx convert in.mkv out.mp4        # H.264/AAC, GPU encoder if one works
 mx convert in.mkv out.mkv -c hevc --quality 26
 mx convert in.mkv out.mp4 --cpu  # force software (smaller files, slower)
 mx convert in.mkv out.mp4 -e libx264 -y
+
+mx remux in.mkv                  # -> in.mp4, lossless, about a second
+mx remux in.mp4 --to mkv
+mx remux in.mkv out.webm
 
 mx trim in.mp4 clip.mp4 --from 1:00 --to 1:30         # frame-exact (re-encodes)
 mx trim in.mp4 clip.mp4 --from 1:00 --length 30 --fast # instant, starts on a keyframe
@@ -50,6 +55,14 @@ mx gif in.mp4 loop.gif --from 5 --to 9 --fps 15 --width 480
 
 Every command that re-encodes takes `-c h264|hevc|av1`, `-e <encoder>`, `--cpu`
 and `--quality`. `-y` replaces existing outputs.
+
+**Convert or remux?** `convert` re-encodes. It can change the codec, size and
+quality, but it's slow and loses a little quality each time. `remux` copies
+the same streams into a different container: lossless and near-instant, but
+the codecs must fit. mkv holds anything; mp4 holds almost everything; webm
+only holds VP8/VP9/AV1 with Opus/Vorbis. Every audio track is kept. Text
+subtitles are converted to the target's subtitle format, and image subtitles
+(Blu-ray PGS) are left out with a note, because only mkv can hold them.
 
 **Trim modes.** Without re-encoding, a cut can only start on a keyframe.
 `--fast` looks up that keyframe, cuts from it and tells you where it is. The

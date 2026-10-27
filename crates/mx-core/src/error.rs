@@ -40,6 +40,9 @@ pub enum ExtractError {
     #[error("no yt-dlp extractor recognises this URL")]
     Unsupported,
 
+    #[error("none of the site's formats match what was asked for (see `mx formats <url>`)")]
+    NoMatchingFormat,
+
     #[error("yt-dlp failed: {0}")]
     Other(String),
 }
@@ -76,6 +79,9 @@ impl ExtractError {
             Self::LoginRequired { site }
         } else if has(&["unsupported url"]) {
             Self::Unsupported
+        } else if has(&["requested format is not available"]) {
+            // Checked before `Unavailable`, which also matches "not available".
+            Self::NoMatchingFormat
         } else if has(&["not available in your country", "geo restrict", "geo-restrict"]) {
             Self::GeoBlocked(message)
         } else if has(&["private video", "video unavailable", "has been removed", "not available"]) {
@@ -108,6 +114,10 @@ mod tests {
         assert!(matches!(
             classify("ERROR: Unsupported URL: https://example.com/"),
             ExtractError::Unsupported
+        ));
+        assert!(matches!(
+            classify("ERROR: [Instagram] De63Np3RuWo: Requested format is not available. Use --list-formats"),
+            ExtractError::NoMatchingFormat
         ));
         assert!(matches!(
             classify("ERROR: [youtube] abc: Private video. Sign in if you've been granted access"),
