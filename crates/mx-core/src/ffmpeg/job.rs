@@ -150,7 +150,22 @@ impl Job {
             .collect()
     }
 
-    pub fn run(&self, cancel: &CancelToken, mut on_progress: impl FnMut(&Progress)) -> Result<()> {
+    pub fn run(&self, cancel: &CancelToken, on_progress: impl FnMut(&Progress)) -> Result<()> {
+        self.run_with_lines(cancel, on_progress, |_| {})
+    }
+
+    /// Like [`Job::run`], but also hands every stdout line to `on_line`.
+    ///
+    /// Analysis filters print their measurements to stdout
+    /// (`ametadata=mode=print:file='pipe\:1'`), interleaved with the progress
+    /// records. The two never collide: progress lines are `key=value` with
+    /// known keys, metadata lines are `frame:N ...` or `lavfi.*=...`.
+    pub fn run_with_lines(
+        &self,
+        cancel: &CancelToken,
+        mut on_progress: impl FnMut(&Progress),
+        mut on_line: impl FnMut(&str),
+    ) -> Result<()> {
         let duration = self
             .duration_secs
             .or_else(|| super::probe(self.first_input.as_ref()?).ok()?.duration_secs());
@@ -171,6 +186,7 @@ impl Job {
             if let Some(p) = parser.feed(line) {
                 on_progress(&p);
             }
+            on_line(line);
         });
 
         let failed = !matches!(&result, Ok(f) if f.status.success());

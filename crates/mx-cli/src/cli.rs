@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mx_core::ffmpeg::ops::Aspect;
+use mx_core::analysis::Threshold;
 use mx_core::units;
 use mx_core::ytdlp::Container;
 
@@ -40,6 +41,18 @@ pub struct GlobalArgs {
 
 fn time(s: &str) -> Result<f64, String> {
     units::parse_time(s).map_err(|e| e.to_string())
+}
+
+/// "auto", "-30", "-30dB"
+fn threshold(s: &str) -> Result<Threshold, String> {
+    if s.eq_ignore_ascii_case("auto") {
+        return Ok(Threshold::Auto);
+    }
+    let number = s.trim().trim_end_matches(['B', 'b']).trim_end_matches(['d', 'D']);
+    number
+        .parse::<f64>()
+        .map(Threshold::Db)
+        .map_err(|_| format!("invalid threshold {s:?}; use auto or a level like -30dB"))
 }
 
 fn size(s: &str) -> Result<u64, String> {
@@ -120,6 +133,21 @@ pub enum Command {
         #[command(flatten)]
         encode: EncodeArgs,
     },
+    /// Find the pauses in a recording (analysis only)
+    Silence {
+        input: PathBuf,
+        #[command(flatten)]
+        detect: SilenceArgs,
+    },
+    /// Remove pauses: tighten talking-head videos, tutorials and podcasts
+    Jumpcut {
+        input: PathBuf,
+        output: PathBuf,
+        #[command(flatten)]
+        detect: SilenceArgs,
+        #[command(flatten)]
+        encode: EncodeArgs,
+    },
     /// Shrink a file to fit a size limit (two-pass encode)
     Compress {
         input: PathBuf,
@@ -197,6 +225,22 @@ pub struct DownloadArgs {
     /// Save yt-dlp's metadata as <name>.info.json beside the media
     #[arg(long)]
     pub info_json: bool,
+}
+
+#[derive(Args)]
+pub struct SilenceArgs {
+    /// Level below which audio counts as silence: auto adapts to the
+    /// recording's noise floor, or give a level like -35dB
+    #[arg(short, long, default_value = "auto", value_parser = threshold, allow_hyphen_values = true)]
+    pub threshold: Threshold,
+
+    /// Shortest pause to remove, in seconds (shorter gaps are between words)
+    #[arg(long, default_value_t = 0.4)]
+    pub min_silence: f64,
+
+    /// Silence left at each side of a cut, in seconds, so speech isn't clipped
+    #[arg(long, default_value_t = 0.1)]
+    pub padding: f64,
 }
 
 /// Encoder choice for every command that re-encodes video.

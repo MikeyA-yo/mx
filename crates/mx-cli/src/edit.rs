@@ -1,4 +1,5 @@
-//! Local processing commands: convert, remux, trim, reframe, compress, speed, gif.
+//! Local processing commands: convert, remux, trim, reframe, silence,
+//! jumpcut, compress, speed, gif.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -6,11 +7,13 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow, bail};
 use indicatif::{DecimalBytes, HumanBytes, ProgressBar};
 
-use crate::cli::{CodecArg, Command, CompressCodecArg, EncodeArgs, FitArg};
+use crate::cli::{CodecArg, Command, CompressCodecArg, EncodeArgs, FitArg, SilenceArgs};
 use crate::{bar_style, display};
 use mx_core::{CancelToken, Cancelled};
 use mx_core::ffmpeg::ops::{self, CompressCodec, Cut, Fit, GifOptions, VideoEncode};
 use mx_core::ffmpeg::{self, Job, Progress, encoders, encoders::Codec, encoders::Encoder};
+use mx_core::analysis::{SilenceOptions, SilenceReport, Threshold, find_silences, measure_loudness};
+use mx_core::timeline;
 use mx_core::units::format_time;
 
 pub struct Ctx<'a> {
@@ -24,7 +27,7 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
     match command {
         Command::Convert { input, output, encode } => {
             check_output(&output, ctx)?;
-            let video = resolve_encoder(&encode)?;
+            let video = resolve_encoder(&encode, video_height(&input))?;
             let job = ops::transcode(&input, &output, video);
             finish(&input, &output, || run_job(ctx, "convert", job))
         }
@@ -53,7 +56,7 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
         }
         Command::Trim { input, output, from, to, length, fast, encode } => {
             check_output(&output, ctx)?;
-            let cut = if fast { Cut::Fast } else { Cut::Exact(resolve_encoder(&encode)?) };
+            let cut = if fast { Cut::Fast } else { Cut::Exact(resolve_encoder(&encode, video_height(&input))?) };
             let end = to.or(length.map(|l| from + l));
             let trim = ops::trim(&input, &output, from, end, cut)?;
             if fast && from - trim.actual_start > 0.001 {
@@ -70,7 +73,7 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
         }
         Command::Reframe { input, output, aspect, fit, position, short_edge, encode } => {
             check_output(&output, ctx)?;
-            let video = resolve_encoder(&encode)?;
+            let video = resolve_encoder(&encode, Some(aspect.frame(short_edge).1))?;
             let fit = match fit {
                 FitArg::Blur => Fit::Blur,
                 FitArg::Crop => Fit::Crop { position },
@@ -81,13 +84,66 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
             let job = ops::reframe(&input, &output, aspect, fit, short_edge, video);
             finish(&input, &output, || run_job(ctx, "reframe", job))
         }
+        Command::Silence { input, detect } => {
+            let duration = probe_duration(&input)?;
+            let report = detect_silences(ctx, &input, &detect)?;
+            print_levels(&report, &detect);
+            const SHOWN: usize = 40;
+            for s in report.silences.iter().take(SHOWN) {
+                println!("  {} - {}  ({:.2}s)", format_time(s.start), format_time(s.end), s.len());
+            }
+            if report.silences.len() > SHOWN {
+                println!("  ... {} more", report.silences.len() - SHOWN);
+            }
+            let silent = timeline::total(&report.silences);
+            let kept = timeline::total(&timeline::keep_ranges(duration, &report.silences, detect.padding));
+            println!(
+                "
+{} pauses, {} of silence. jumpcut would remove {} ({:.0}%): {} -> {}",
+                report.silences.len(),
+                display::duration(silent),
+                display::duration(duration - kept),
+                (duration - kept) / duration * 100.0,
+                display::duration(duration),
+                display::duration(kept)
+            );
+            Ok(())
+        }
+        Command::Jumpcut { input, output, detect, encode } => {
+            check_output(&output, ctx)?;
+            let source = ffmpeg::probe(&input)?;
+            let duration = source.duration_secs().ok_or_else(|| anyhow!("couldn't read the duration"))?;
+            let video = match source.video() {
+                Some(v) => Some(resolve_encoder(&encode, v.height)?),
+                None => None,
+            };
+            let report = detect_silences(ctx, &input, &detect)?;
+            print_levels(&report, &detect);
+            let keep = timeline::keep_ranges(duration, &report.silences, detect.padding);
+            if (duration - timeline::total(&keep)) < 0.05 {
+                println!("no pauses long enough to cut (try a higher --threshold or lower --min-silence)");
+                return Ok(());
+            }
+            let cut = ops::jumpcut(&input, &output, &keep, video)?;
+            let after = cut.output_duration();
+            let (first, last) = (cut.kept[0], cut.kept[cut.kept.len() - 1]);
+            let removed = cut.kept.len() - 1 + usize::from(first.start > 0.0) + usize::from(last.end < duration - 0.05);
+            println!(
+                "cutting  {removed} pauses: {} -> {} (-{}, {:.0}%)",
+                display::duration(duration),
+                display::duration(after),
+                display::duration(duration - after),
+                (duration - after) / duration * 100.0
+            );
+            finish(&input, &output, || run_job(ctx, "jumpcut", cut.job.clone()))
+        }
         Command::Compress { input, output, size, codec } => {
             check_output(&output, ctx)?;
             compress(ctx, &input, &output, size, codec)
         }
         Command::Speed { input, output, factor, encode } => {
             check_output(&output, ctx)?;
-            let video = resolve_encoder(&encode)?;
+            let video = resolve_encoder(&encode, video_height(&input))?;
             let job = ops::speed(&input, &output, factor, video)?;
             finish(&input, &output, || run_job(ctx, "speed", job))
         }
@@ -101,6 +157,28 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
     }
 }
 
+fn probe_duration(input: &Path) -> Result<f64> {
+    ffmpeg::probe(input)?
+        .duration_secs()
+        .ok_or_else(|| anyhow!("couldn't read the duration of {}", input.display()))
+}
+
+fn detect_silences(ctx: &Ctx, input: &Path, args: &SilenceArgs) -> Result<SilenceReport> {
+    let bar = progress_bar("analyse");
+    let envelope = measure_loudness(input, ctx.cancel, |p| show_progress(&bar, p));
+    bar.finish_and_clear();
+    let opts = SilenceOptions { threshold: args.threshold, min_duration: args.min_silence };
+    Ok(find_silences(&envelope?, &opts))
+}
+
+fn print_levels(report: &SilenceReport, args: &SilenceArgs) {
+    let mode = if args.threshold == Threshold::Auto { " (auto)" } else { "" };
+    println!(
+        "levels   noise floor {:.1} dB, speech {:.1} dB -> silence below {:.1} dB{mode}",
+        report.noise_floor_db, report.speech_db, report.threshold_db
+    );
+}
+
 /// Fail before any slow work (encoder detection, pass 1) rather than after.
 fn check_output(output: &Path, ctx: &Ctx) -> Result<()> {
     if output.exists() && !ctx.overwrite {
@@ -109,7 +187,10 @@ fn check_output(output: &Path, ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-fn resolve_encoder(args: &EncodeArgs) -> Result<VideoEncode> {
+/// Pick the encoder for an output `output_height` pixels tall (None if
+/// unknown): an explicit `-e`, else the best working one for the codec.
+fn resolve_encoder(args: &EncodeArgs, output_height: Option<u32>) -> Result<VideoEncode> {
+    let mut why = String::new();
     let encoder = match &args.encoder {
         Some(name) => Encoder::lookup(name).ok_or_else(|| {
             let known: Vec<_> = encoders::KNOWN.iter().map(|e| e.name).collect();
@@ -121,13 +202,30 @@ fn resolve_encoder(args: &EncodeArgs) -> Result<VideoEncode> {
                 CodecArg::Hevc => Codec::Hevc,
                 CodecArg::Av1 => Codec::Av1,
             };
-            encoders::pick(&encoders::detect(), codec, !args.cpu)
-                .ok_or_else(|| anyhow!("no working {codec:?} encoder found (see `mx doctor`)"))?
+            let available = encoders::detect();
+            let chosen = encoders::pick(&available, codec, !args.cpu, output_height)
+                .ok_or_else(|| anyhow!("no working {codec:?} encoder found (see `mx doctor`)"))?;
+            let gpu = encoders::pick(&available, codec, true, None).filter(|e| e.is_hardware());
+            if let (false, Some(gpu), Some(h)) = (args.cpu, gpu, output_height)
+                && !chosen.is_hardware()
+            {
+                why = format!(
+                    " (CPU beats {} below {}p; this output is {h}p)",
+                    gpu.name,
+                    encoders::HARDWARE_MIN_HEIGHT
+                );
+            }
+            chosen
         }
     };
     let quality = args.quality.unwrap_or_else(|| encoder.default_quality());
-    println!("encoder  {} ({:?}), quality {quality}", encoder.name, encoder.backend);
+    println!("encoder  {} ({:?}), quality {quality}{why}", encoder.name, encoder.backend);
     Ok(VideoEncode { encoder, quality: Some(quality) })
+}
+
+/// Height of the input's video, if it has any.
+fn video_height(input: &Path) -> Option<u32> {
+    ffmpeg::probe(input).ok()?.video()?.height
 }
 
 fn run_job(ctx: &Ctx, label: &str, job: Job) -> Result<()> {

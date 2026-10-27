@@ -49,11 +49,16 @@ pub struct Stream {
     pub sample_rate: Option<String>,
     pub channels: Option<u32>,
     pub bit_rate: Option<String>,
+    pub duration: Option<String>,
     #[serde(default)]
     pub tags: HashMap<String, String>,
 }
 
 impl Stream {
+    pub fn duration_secs(&self) -> Option<f64> {
+        self.duration.as_deref()?.parse().ok()
+    }
+
     /// "30000/1001" -> 29.97
     pub fn fps(&self) -> Option<f64> {
         let (n, d) = self.avg_frame_rate.as_deref()?.split_once('/')?;

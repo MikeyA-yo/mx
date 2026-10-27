@@ -50,6 +50,9 @@ mx reframe in.mp4 short.mp4                            # 9:16, blurred backgroun
 mx reframe in.mp4 square.mp4 -a 1:1 --fit crop --position 0.3
 mx compress in.mp4 small.mp4 -s 10MB                   # two-pass, guaranteed under 10 MB
 mx speed in.mp4 fast.mp4 2                             # 0.1x to 10x, audio keeps pitch
+mx silence talk.mp4                                    # list pauses, preview what a jump cut removes
+mx jumpcut talk.mp4 tight.mp4                          # remove pauses (video or audio-only)
+mx jumpcut talk.mp4 tight.mp4 --min-silence 0.25 --padding 0.08 -t -38dB
 mx gif in.mp4 loop.gif --from 5 --to 9 --fps 15 --width 480
 ```
 
@@ -64,6 +67,16 @@ only holds VP8/VP9/AV1 with Opus/Vorbis. Every audio track is kept. Text
 subtitles are converted to the target's subtitle format, and image subtitles
 (Blu-ray PGS) are left out with a note, because only mkv can hold them.
 
+**Jump cuts.** ffmpeg measures loudness every 20 ms, and the pauses are found
+in Rust. A fixed threshold like -30 dB fails on real recordings: in a noisy
+room the background never drops that low. So by default the threshold sits a
+third of the way from the recording's noise floor to its speech level.
+`--min-silence` skips gaps between words, and `--padding` keeps a little air
+around each cut so words aren't clipped. Every cut is snapped to a video frame
+and audio is cut at the exact sample, so sync holds: 246 cuts on a 25-minute
+video ended with audio and video within the same 66 ms (AAC's fixed overhead)
+as a 5-cut clip.
+
 **Trim modes.** Without re-encoding, a cut can only start on a keyframe.
 `--fast` looks up that keyframe, cuts from it and tells you where it is. The
 default re-encodes and starts on the exact frame.
@@ -76,6 +89,11 @@ percent on short clips), pass 2 is re-run at a corrected bitrate.
 `mx doctor` test-encodes with every known encoder (NVENC, QuickSync, AMF,
 x264/x265/SVT-AV1) and lists the ones that actually work here. ffmpeg builds
 include GPU encoders whether or not the hardware is present.
+
+The GPU isn't always faster. GPU encoders pay a fixed cost per frame, so on
+small video the CPU wins. On an Intel iGPU, QuickSync ran ~200-240 fps at both
+360p and 1080p, while libx264 ran ~440 fps at 360p but was 2.8x slower at
+1080p60. So auto-pick uses the CPU below 720p and says so.
 
 Ctrl+C stops any download or encode cleanly and removes the partial file.
 
@@ -112,7 +130,9 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 | `crates/mx-core/src/ytdlp/` | locate and run yt-dlp; typed metadata; progress templates |
 | `crates/mx-core/src/ffmpeg/job.rs` | run any ffmpeg command with `-progress` parsing and cancellation |
 | `crates/mx-core/src/ffmpeg/encoders.rs` | encoder catalogue, runtime detection, quality flags per backend |
-| `crates/mx-core/src/ffmpeg/ops/` | ready-made jobs: transcode, trim, reframe, compress, speed, gif |
+| `crates/mx-core/src/ffmpeg/ops/` | ready-made jobs: transcode, remux, trim, reframe, jumpcut, compress, speed, gif |
+| `crates/mx-core/src/analysis/` | measurements: loudness envelope, silence detection |
+| `crates/mx-core/src/timeline.rs` | time ranges, the building block of edit lists |
 | `crates/mx-core/src/ffmpeg/probe.rs` | ffprobe |
 | `crates/mx-core/src/process.rs` | shared subprocess streaming, cancellable |
 | `crates/mx-core/src/{platform,error}.rs` | site detection; yt-dlp errors → fixes |

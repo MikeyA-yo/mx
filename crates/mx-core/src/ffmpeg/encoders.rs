@@ -133,12 +133,33 @@ pub fn detect() -> Vec<Encoder> {
     })
 }
 
-/// Preferred working encoder for `codec`.
-pub fn pick(available: &[Encoder], codec: Codec, allow_hardware: bool) -> Option<Encoder> {
-    available
-        .iter()
-        .copied()
-        .find(|e| e.codec == codec && (allow_hardware || !e.is_hardware()))
+/// Below this output height, software encoding is preferred.
+///
+/// GPU encoders pay a fixed cost per frame (copying it to the GPU and
+/// back), so they don't speed up as frames get smaller, while software
+/// encoders do. Measured on an Intel iGPU (QuickSync) against libx264:
+/// QSV ran ~200-240 fps at both 360p and 1080p; x264 ran ~440 fps at 360p
+/// but was 2.8x slower than QSV at 1080p60. The crossover sits around 720p.
+pub const HARDWARE_MIN_HEIGHT: u32 = 720;
+
+/// Preferred working encoder for `codec`. `output_height`, when known,
+/// steers small outputs to software (see [`HARDWARE_MIN_HEIGHT`]); if no
+/// software encoder works, hardware is still used rather than nothing.
+pub fn pick(
+    available: &[Encoder],
+    codec: Codec,
+    allow_hardware: bool,
+    output_height: Option<u32>,
+) -> Option<Encoder> {
+    let candidates = available.iter().copied().filter(|e| e.codec == codec);
+    let small = output_height.is_some_and(|h| h < HARDWARE_MIN_HEIGHT);
+    if !allow_hardware || small {
+        let software = candidates.clone().find(|e| !e.is_hardware());
+        if software.is_some() || !allow_hardware {
+            return software;
+        }
+    }
+    candidates.into_iter().next()
 }
 
 #[cfg(test)]
@@ -152,10 +173,22 @@ mod tests {
             Encoder::lookup("libx264").unwrap(),
             Encoder::lookup("libsvtav1").unwrap(),
         ];
-        assert_eq!(pick(&available, Codec::H264, true).unwrap().name, "h264_qsv");
-        assert_eq!(pick(&available, Codec::H264, false).unwrap().name, "libx264");
-        assert_eq!(pick(&available, Codec::Av1, true).unwrap().name, "libsvtav1");
-        assert_eq!(pick(&available, Codec::Hevc, true), None);
+        assert_eq!(pick(&available, Codec::H264, true, None).unwrap().name, "h264_qsv");
+        assert_eq!(pick(&available, Codec::H264, false, None).unwrap().name, "libx264");
+        assert_eq!(pick(&available, Codec::Av1, true, None).unwrap().name, "libsvtav1");
+        assert_eq!(pick(&available, Codec::Hevc, true, None), None);
+    }
+
+    #[test]
+    fn small_outputs_go_to_software_unless_only_hardware_works() {
+        let both = [Encoder::lookup("h264_qsv").unwrap(), Encoder::lookup("libx264").unwrap()];
+        assert_eq!(pick(&both, Codec::H264, true, Some(360)).unwrap().name, "libx264");
+        assert_eq!(pick(&both, Codec::H264, true, Some(720)).unwrap().name, "h264_qsv");
+        assert_eq!(pick(&both, Codec::H264, true, Some(1920)).unwrap().name, "h264_qsv");
+
+        let gpu_only = [Encoder::lookup("hevc_qsv").unwrap()];
+        assert_eq!(pick(&gpu_only, Codec::Hevc, true, Some(360)).unwrap().name, "hevc_qsv");
+        assert_eq!(pick(&gpu_only, Codec::Hevc, false, Some(360)), None);
     }
 
     #[test]
