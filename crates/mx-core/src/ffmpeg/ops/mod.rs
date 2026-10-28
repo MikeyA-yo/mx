@@ -4,6 +4,7 @@
 //! Inputs are probed up front so every job knows its output duration, and
 //! therefore reports a real percentage even when it changes the length.
 
+mod clip;
 mod compress;
 mod gif;
 mod jumpcut;
@@ -12,6 +13,7 @@ mod remux;
 mod speed;
 mod trim;
 
+pub use clip::{Frame, clip};
 pub use compress::{Compress, CompressCodec, CompressOutcome, CompressPlan, compress, plan_compression};
 pub use gif::{GifOptions, gif};
 pub use jumpcut::{JumpCut, jumpcut};
@@ -43,6 +45,16 @@ impl VideoEncode {
 
 fn aac(kbps: u32) -> Vec<String> {
     ["-c:a", "aac", "-b:a", &format!("{kbps}k")].map(String::from).to_vec()
+}
+
+/// Audio codec for an audio-only output, by its extension.
+fn audio_codec(output: &Path) -> Vec<String> {
+    match output.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("mp3") => ["-c:a", "libmp3lame", "-q:a", "2"].map(String::from).to_vec(),
+        // Lossless containers pick their own lossless codec.
+        Some("wav" | "flac") => Vec::new(),
+        _ => aac(192),
+    }
 }
 
 /// Best video stream plus audio if there is any. Subtitle and data streams

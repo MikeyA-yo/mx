@@ -53,6 +53,9 @@ mx speed in.mp4 fast.mp4 2                             # 0.1x to 10x, audio keep
 mx silence talk.mp4                                    # list pauses, preview what a jump cut removes
 mx jumpcut talk.mp4 tight.mp4                          # remove pauses (video or audio-only)
 mx jumpcut talk.mp4 tight.mp4 --min-silence 0.25 --padding 0.08 -t -38dB
+mx highlights film.mp4                                 # the 3 most eventful 30 s stretches
+mx highlights film.mp4 -n 5 -l 20 --to 7:15            # search only before the credits
+mx highlights film.mp4 --export clips --vertical       # render them as 9:16 Shorts
 mx gif in.mp4 loop.gif --from 5 --to 9 --fps 15 --width 480
 ```
 
@@ -76,6 +79,24 @@ around each cut so words aren't clipped. Every cut is snapped to a video frame
 and audio is cut at the exact sample, so sync holds: 246 cuts on a 25-minute
 video ended with audio and video within the same 66 ms (AAC's fixed overhead)
 as a 5-cut clip.
+
+**Highlights.** Every one-second step of the timeline is a candidate window,
+described by four signals: loudness, how little of it is silence, how much
+the picture moves, and how many scene cuts it has. Each signal is ranked
+against the rest of the same recording, because a podcast's "loud" is a
+concert's "quiet". A signal that barely varies is left out instead of
+ranking noise: a levelled voiceover has the same loudness everywhere, and a
+static podcast shot never moves. The best windows are picked with space
+between them, and their edges are moved onto a nearby pause or scene cut,
+so clips don't start mid-word.
+
+These signals measure activity, not meaning. They found the key scenes of
+Big Buck Bunny, but scored its rolling credits (loud music, fast-moving
+text) as action too, so `--to` keeps the search before them. On a talk or
+tutorial, what makes a moment good is what's said; transcripts will cover
+that. Measuring takes about a minute per 10 minutes of 720p (two ffmpeg
+processes, audio and video in parallel) and is cached, so re-running with
+different options is instant.
 
 **Trim modes.** Without re-encoding, a cut can only start on a keyframe.
 `--fast` looks up that keyframe, cuts from it and tells you where it is. The
@@ -130,8 +151,8 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 | `crates/mx-core/src/ytdlp/` | locate and run yt-dlp; typed metadata; progress templates |
 | `crates/mx-core/src/ffmpeg/job.rs` | run any ffmpeg command with `-progress` parsing and cancellation |
 | `crates/mx-core/src/ffmpeg/encoders.rs` | encoder catalogue, runtime detection, quality flags per backend |
-| `crates/mx-core/src/ffmpeg/ops/` | ready-made jobs: transcode, remux, trim, reframe, jumpcut, compress, speed, gif |
-| `crates/mx-core/src/analysis/` | measurements: loudness envelope, silence detection |
+| `crates/mx-core/src/ffmpeg/ops/` | ready-made jobs: transcode, remux, trim, reframe, clip, jumpcut, compress, speed, gif |
+| `crates/mx-core/src/analysis/` | measurements and decisions: loudness, motion and scene cuts, silences, highlights |
 | `crates/mx-core/src/timeline.rs` | time ranges, the building block of edit lists |
 | `crates/mx-core/src/ffmpeg/probe.rs` | ffprobe |
 | `crates/mx-core/src/process.rs` | shared subprocess streaming, cancellable |
@@ -142,7 +163,7 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 ## Roadmap
 
 1. **Adaptive streaming**: encode a 1080/720/480/240 ladder with aligned keyframes, package as HLS/DASH.
-2. **Auto-highlights**: scene detection, loudness and motion scoring, then cut clips and reframe them vertically.
+2. **Auto-highlights**: done for activity (loudness, motion, cuts); next, transcript-aware picks.
 3. **Subtitles**: Whisper → SRT, optional translation, burned-in styled captions.
 4. **Live recorder**: watch a channel, record when it goes live, handle stream drops.
 5. **Enhancement**: Real-ESRGAN upscaling, RIFE interpolation, Demucs stem separation.

@@ -55,7 +55,8 @@ pub enum Fit {
     Pad,
 }
 
-fn filtergraph(fit: Fit, w: u32, h: u32) -> String {
+/// Graph from `[0:v:0]` to `[v]` that fills a `w`x`h` frame.
+pub(super) fn filtergraph(fit: Fit, w: u32, h: u32) -> String {
     // Scale the picture to fit inside / to cover the target frame.
     let contain = format!("scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2");
     let cover = |w: u32, h: u32| format!("scale={w}:{h}:force_original_aspect_ratio=increase");

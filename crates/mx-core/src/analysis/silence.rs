@@ -47,7 +47,7 @@ const DIGITAL_SILENCE_DB: f64 = -90.0;
 /// clicks inside pauses and brief dips inside words.
 const SMOOTHING: usize = 5;
 
-fn percentile(sorted: &[f64], q: f64) -> f64 {
+pub(super) fn percentile(sorted: &[f64], q: f64) -> f64 {
     sorted[((sorted.len() - 1) as f64 * q).round() as usize]
 }
 

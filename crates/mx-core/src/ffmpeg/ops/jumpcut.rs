@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use super::{VideoEncode, aac, finish};
+use super::{VideoEncode, aac, audio_codec, finish};
 use crate::ffmpeg::{Job, probe};
 use crate::timeline::{Range, total};
 
@@ -105,15 +105,6 @@ fn filter_script(ranges: &[Range], video_rate: Option<(&str, f64)>) -> String {
             select_expr(ranges, 0.5 / fps)
         ),
         None => audio,
-    }
-}
-
-fn audio_codec(output: &Path) -> Vec<String> {
-    match output.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
-        Some("mp3") => ["-c:a", "libmp3lame", "-q:a", "2"].map(String::from).to_vec(),
-        // Lossless containers pick their own lossless codec.
-        Some("wav" | "flac") => Vec::new(),
-        _ => aac(192),
     }
 }
 

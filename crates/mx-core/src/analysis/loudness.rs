@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cancel::CancelToken;
 use crate::ffmpeg::{Job, Progress, probe};
@@ -27,7 +27,7 @@ const FILTER: &str = "aformat=channel_layouts=mono,aresample=16000,asetnsamples=
     astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level,\
     ametadata=mode=print:key=lavfi.astats.Overall.RMS_level:file='pipe\\:1':direct=1";
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Envelope {
     /// (window start in seconds, RMS level in dBFS), in time order.
     pub points: Vec<(f64, f64)>,

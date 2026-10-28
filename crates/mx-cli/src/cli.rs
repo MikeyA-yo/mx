@@ -148,6 +148,46 @@ pub enum Command {
         #[command(flatten)]
         encode: EncodeArgs,
     },
+    /// Find the most eventful moments (loud, lively, busy picture, fast cuts)
+    /// and optionally export them as clips
+    Highlights {
+        input: PathBuf,
+        /// How many highlights to find
+        #[arg(short = 'n', long, default_value_t = 3)]
+        count: usize,
+        /// Length of each highlight; edges move up to 10% to land on a pause or cut
+        #[arg(short, long, default_value = "30", value_parser = time)]
+        length: f64,
+        /// Only search from this time on
+        #[arg(long, value_parser = time)]
+        from: Option<f64>,
+        /// Only search up to this time (e.g. where the end credits start)
+        #[arg(long, value_parser = time)]
+        to: Option<f64>,
+        /// Render each highlight as a clip into this directory
+        #[arg(long, value_name = "DIR")]
+        export: Option<PathBuf>,
+        /// Export vertical 9:16 clips for Shorts/Reels/TikTok
+        #[arg(long, requires = "export", conflicts_with = "aspect")]
+        vertical: bool,
+        /// Export clips in this aspect ratio instead, e.g. 1:1
+        #[arg(short, long, requires = "export")]
+        aspect: Option<Aspect>,
+        /// How reframed clips fill the new frame
+        #[arg(long, value_enum, default_value_t = FitArg::Blur)]
+        fit: FitArg,
+        /// With --fit crop: which part to keep, 0 (left/top) to 1 (right/bottom)
+        #[arg(long, default_value_t = 0.5)]
+        position: f64,
+        /// Shorter side of reframed clips in pixels [default: the source's, at most 1080]
+        #[arg(long)]
+        short_edge: Option<u32>,
+        /// Print the highlights as JSON
+        #[arg(long, conflicts_with = "export")]
+        json: bool,
+        #[command(flatten)]
+        encode: EncodeArgs,
+    },
     /// Shrink a file to fit a size limit (two-pass encode)
     Compress {
         input: PathBuf,

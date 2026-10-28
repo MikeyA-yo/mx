@@ -1,5 +1,5 @@
 //! Local processing commands: convert, remux, trim, reframe, silence,
-//! jumpcut, compress, speed, gif.
+//! jumpcut, highlights, compress, speed, gif.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -10,10 +10,13 @@ use indicatif::{DecimalBytes, HumanBytes, ProgressBar};
 use crate::cli::{CodecArg, Command, CompressCodecArg, EncodeArgs, FitArg, SilenceArgs};
 use crate::{bar_style, display};
 use mx_core::{CancelToken, Cancelled};
-use mx_core::ffmpeg::ops::{self, CompressCodec, Cut, Fit, GifOptions, VideoEncode};
+use mx_core::ffmpeg::ops::{self, Aspect, CompressCodec, Cut, Fit, Frame, GifOptions, VideoEncode};
 use mx_core::ffmpeg::{self, Job, Progress, encoders, encoders::Codec, encoders::Encoder};
-use mx_core::analysis::{SilenceOptions, SilenceReport, Threshold, find_silences, measure_loudness};
-use mx_core::timeline;
+use mx_core::analysis::{
+    self, Breakdown, Highlight, HighlightOptions, SilenceOptions, SilenceReport, Signals, Threshold, find_highlights,
+    find_silences, measure_loudness,
+};
+use mx_core::timeline::{self, Range};
 use mx_core::units::format_time;
 
 pub struct Ctx<'a> {
@@ -74,14 +77,9 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
         Command::Reframe { input, output, aspect, fit, position, short_edge, encode } => {
             check_output(&output, ctx)?;
             let video = resolve_encoder(&encode, Some(aspect.frame(short_edge).1))?;
-            let fit = match fit {
-                FitArg::Blur => Fit::Blur,
-                FitArg::Crop => Fit::Crop { position },
-                FitArg::Pad => Fit::Pad,
-            };
             let (w, h) = aspect.frame(short_edge);
             println!("frame    {}:{} -> {w}x{h}", aspect.w, aspect.h);
-            let job = ops::reframe(&input, &output, aspect, fit, short_edge, video);
+            let job = ops::reframe(&input, &output, aspect, fit_of(fit, position), short_edge, video);
             finish(&input, &output, || run_job(ctx, "reframe", job))
         }
         Command::Silence { input, detect } => {
@@ -137,6 +135,55 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
             );
             finish(&input, &output, || run_job(ctx, "jumpcut", cut.job.clone()))
         }
+        Command::Highlights {
+            input,
+            count,
+            length,
+            from,
+            to,
+            export,
+            vertical,
+            aspect,
+            fit,
+            position,
+            short_edge,
+            json,
+            encode,
+        } => {
+            let source = ffmpeg::probe(&input)?;
+            let aspect = if vertical { Some(Aspect { w: 9, h: 16 }) } else { aspect };
+            let frame = match (aspect, source.video()) {
+                (None, _) => None,
+                (Some(_), None) => bail!("{} has no video to reframe", input.display()),
+                (Some(aspect), Some(v)) => {
+                    let source_short = v.width.zip(v.height).map(|(w, h)| w.min(h)).unwrap_or(1080);
+                    let short_edge = short_edge.unwrap_or(source_short.min(1080));
+                    Some(Frame { aspect, fit: fit_of(fit, position), short_edge })
+                }
+            };
+            // Pick the encoder before the slow analysis, so a bad -e fails fast.
+            let video = match (&export, source.video()) {
+                (Some(_), Some(v)) => {
+                    let height = frame.map(|f| f.aspect.frame(f.short_edge).1).or(v.height);
+                    Some(resolve_encoder(&encode, height)?)
+                }
+                _ => None,
+            };
+
+            let signals = cached_signals(ctx, &input)?;
+            let within = (from.is_some() || to.is_some())
+                .then(|| Range::new(from.unwrap_or(0.0), to.unwrap_or(f64::INFINITY)));
+            let found = find_highlights(&signals, &HighlightOptions { count, length, within });
+            if json {
+                println!("{}", serde_json::to_string_pretty(&found)?);
+                return Ok(());
+            }
+            print_highlights(&signals, &found);
+            match export {
+                Some(dir) => export_highlights(ctx, &input, &dir, &found, frame, video),
+                None => Ok(()),
+            }
+        }
         Command::Compress { input, output, size, codec } => {
             check_output(&output, ctx)?;
             compress(ctx, &input, &output, size, codec)
@@ -155,6 +202,125 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
         }
         _ => unreachable!("not a processing command"),
     }
+}
+
+fn fit_of(fit: FitArg, position: f64) -> Fit {
+    match fit {
+        FitArg::Blur => Fit::Blur,
+        FitArg::Crop => Fit::Crop { position },
+        FitArg::Pad => Fit::Pad,
+    }
+}
+
+/// Short display names for the signals a highlight was ranked on.
+fn parts(b: Breakdown) -> [(&'static str, Option<f64>); 4] {
+    [("loud", b.loudness), ("lively", b.activity), ("motion", b.motion), ("cuts", b.pace)]
+}
+
+fn print_highlights(signals: &Signals, found: &[Highlight]) {
+    let Some(first) = found.first() else {
+        println!("no highlights: the recording is empty");
+        return;
+    };
+    let used: Vec<&str> = parts(first.breakdown).iter().filter(|(_, v)| v.is_some()).map(|(name, _)| *name).collect();
+    let cuts = signals.motion.as_ref().map(|m| m.scene_changes().len());
+    println!(
+        "signals  {}{}",
+        if used.is_empty() { "none varied enough to rank; showing the start".to_string() } else { used.join(", ") },
+        cuts.map(|n| format!(" ({n} scene cuts in {})", display::duration(signals.duration))).unwrap_or_default()
+    );
+    println!();
+    for (i, h) in found.iter().enumerate() {
+        let detail: Vec<String> =
+            parts(h.breakdown).into_iter().filter_map(|(name, v)| Some(format!("{name} {:.0}", v? * 100.0))).collect();
+        println!(
+            "#{}  {} - {}  ({:.1}s)  score {:>3.0}   {}",
+            i + 1,
+            format_time(h.range.start),
+            format_time(h.range.end),
+            h.range.len(),
+            h.score * 100.0,
+            detail.join(" · ")
+        );
+    }
+}
+
+/// Measuring a long video takes a minute or more, and the usual workflow
+/// runs `highlights` a few times (look, adjust --from/--to, then export),
+/// so measurements are kept in the temp directory. The key includes the
+/// file's size and modification time, so an edited file is measured again.
+fn cached_signals(ctx: &Ctx, input: &Path) -> Result<Signals> {
+    use std::hash::{Hash, Hasher};
+
+    const VERSION: u32 = 1; // bump when what's measured changes
+    let meta = std::fs::metadata(input)?;
+    let mut key = std::collections::hash_map::DefaultHasher::new();
+    (VERSION, std::fs::canonicalize(input)?, meta.len(), meta.modified().ok()).hash(&mut key);
+    let path = std::env::temp_dir().join("mx-cache").join(format!("signals-{:016x}.json", key.finish()));
+
+    if let Some(signals) = std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()) {
+        if ctx.verbose {
+            eprintln!("using cached measurements from {}", path.display());
+        }
+        return Ok(signals);
+    }
+    let bar = progress_bar("analyse");
+    let signals = analysis::measure_signals(input, ctx.cancel, |p| show_progress(&bar, p));
+    bar.finish_and_clear();
+    let signals = signals?;
+    // A failed write only costs the next run its speed-up.
+    if let Some(dir) = path.parent()
+        && std::fs::create_dir_all(dir).is_ok()
+        && let Ok(json) = serde_json::to_vec(&signals)
+    {
+        let _ = std::fs::write(&path, json);
+    }
+    Ok(signals)
+}
+
+fn export_highlights(
+    ctx: &Ctx,
+    input: &Path,
+    dir: &Path,
+    found: &[Highlight],
+    frame: Option<Frame>,
+    video: Option<VideoEncode>,
+) -> Result<()> {
+    let stem = input.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into());
+    let input_ext = input.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    // Clips are H.264/AAC, which webm can't hold; audio-only clips keep
+    // the source format where the encoder for it is known.
+    let ext = match (video.is_some(), input_ext.as_str()) {
+        (true, "mkv") => "mkv",
+        (true, _) => "mp4",
+        (false, e @ ("mp3" | "m4a" | "wav" | "flac")) => e,
+        (false, _) => "m4a",
+    };
+    let outputs: Vec<_> = found
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let at = h.range.start as u64;
+            dir.join(format!("{stem}_h{}_{}m{:02}s.{ext}", i + 1, at / 60, at % 60))
+        })
+        .collect();
+    for output in &outputs {
+        check_output(output, ctx)?;
+    }
+    std::fs::create_dir_all(dir)?;
+    if let Some(f) = frame {
+        let (w, h) = f.aspect.frame(f.short_edge);
+        println!("\nframe    {}:{} -> {w}x{h}", f.aspect.w, f.aspect.h);
+    }
+    let started = Instant::now();
+    for (i, (h, output)) in found.iter().zip(&outputs).enumerate() {
+        let job = ops::clip(input, output, h.range, frame, video)?;
+        run_job(ctx, &format!("clip {}/{}", i + 1, found.len()), job)?;
+        let size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+        println!("saved    {} ({})", output.display(), HumanBytes(size));
+    }
+    println!("done in {:.1}s", started.elapsed().as_secs_f64());
+    Ok(())
 }
 
 fn probe_duration(input: &Path) -> Result<f64> {
