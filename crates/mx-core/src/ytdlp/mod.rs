@@ -135,6 +135,14 @@ impl YtDlp {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
+    /// Whether yt-dlp can impersonate a real browser's network fingerprint
+    /// (needs the optional `curl_cffi` package). TikTok answers requests
+    /// that can't with a bot challenge instead of the video page.
+    pub fn can_impersonate(&self) -> Result<bool> {
+        let out = self.base_command().arg("--list-impersonate-targets").output()?;
+        Ok(String::from_utf8_lossy(&out.stdout).contains("curl_cffi"))
+    }
+
     fn base_command(&self) -> Command {
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.prefix)

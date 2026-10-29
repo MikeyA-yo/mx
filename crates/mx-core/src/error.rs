@@ -11,6 +11,13 @@ pub enum ExtractError {
     BotCheck { site: &'static str },
 
     #[error(
+        "{site} answered with a bot challenge, which yt-dlp can only pass by impersonating a real\n  \
+         browser, and the package for that isn't installed.\n  \
+         Fix: pip install -U \"yt-dlp[default,curl-cffi]\""
+    )]
+    ImpersonationMissing { site: &'static str },
+
+    #[error(
         "couldn't read the browser's cookie database: it's locked while the browser is running.\n  \
          Fix: fully quit the browser (including background/tray processes) and retry,\n  \
          or export cookies.txt and pass --cookies <file>"
@@ -66,6 +73,11 @@ impl ExtractError {
             Self::CookiesLocked
         } else if has(&["failed to decrypt with dpapi"]) {
             Self::CookiesEncrypted
+        } else if stderr.contains("no impersonate target is available") {
+            // Only a WARNING in yt-dlp, followed by a vague ERROR (TikTok:
+            // "Unexpected response from webpage request"), so the whole
+            // output is searched, not just the error line.
+            Self::ImpersonationMissing { site }
         } else if has(&["not a bot", "confirm you're not", "confirm you\u{2019}re not"]) {
             Self::BotCheck { site }
         } else if has(&[
@@ -137,6 +149,21 @@ mod tests {
         assert!(matches!(
             classify("ERROR: Failed to decrypt with DPAPI. See  https://github.com/yt-dlp/yt-dlp/issues/10927  for more info"),
             ExtractError::CookiesEncrypted
+        ));
+    }
+
+    #[test]
+    fn missing_impersonation_is_found_in_the_warning_before_the_error() {
+        // Verbatim from yt-dlp 2026.10.21 on a TikTok link, without curl_cffi.
+        let stderr = "WARNING: [TikTok] The extractor is attempting impersonation, but no impersonate target is \
+                      available. If you encounter errors, then see  https://github.com/yt-dlp/yt-dlp#impersonation  \
+                      for information on installing the required dependencies\n\
+                      ERROR: [TikTok] 7694474492692811039: Unexpected response from webpage request; please report \
+                      this issue on  https://github.com/yt-dlp/yt-dlp/issues?q= , filling out the appropriate issue \
+                      template. Confirm you are on the latest version using  yt-dlp -U\n";
+        assert!(matches!(
+            ExtractError::classify(stderr, Platform::TikTok),
+            ExtractError::ImpersonationMissing { site: "TikTok" }
         ));
     }
 

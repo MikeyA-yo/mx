@@ -158,8 +158,15 @@ fn doctor(global: &GlobalArgs) {
     check(
         "yt-dlp",
         yt.as_ref().and_then(|y| Some(format!("{} (via `{}`)", y.version().ok()?, y.invocation()))),
-        "pip install -U \"yt-dlp[default]\"",
+        "pip install -U \"yt-dlp[default,curl-cffi]\"",
     );
+    if let Some(yt) = &yt {
+        check(
+            "browser",
+            yt.can_impersonate().ok().filter(|&ok| ok).map(|_| "impersonation available (curl_cffi)".to_string()),
+            "TikTok and others send bot challenges without it: pip install -U \"yt-dlp[default,curl-cffi]\"",
+        );
+    }
     check("ffmpeg", ffmpeg::version("ffmpeg"), "needed to merge video+audio and for all processing");
     check("ffprobe", ffmpeg::version("ffprobe"), "ships with ffmpeg");
     let deno = Process::new("deno")

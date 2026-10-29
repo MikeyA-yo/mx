@@ -11,7 +11,7 @@ of every file it saves. Running yt-dlp as a separate process means
 
 ## Requirements
 
-- `yt-dlp`: `pip install -U "yt-dlp[default]"`. Found on PATH, through `YTDLP_PATH`, or as `python -m yt_dlp`.
+- `yt-dlp`: `pip install -U "yt-dlp[default,curl-cffi]"`. Found on PATH, through `YTDLP_PATH`, or as `python -m yt_dlp`.
 - `ffmpeg` + `ffprobe` on PATH (or `FFMPEG_PATH` / `FFPROBE_PATH`).
 - `deno`: yt-dlp needs a JS runtime for YouTube.
 
