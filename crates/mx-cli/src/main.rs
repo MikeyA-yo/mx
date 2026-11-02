@@ -1,6 +1,7 @@
 mod cli;
 mod display;
 mod edit;
+mod speech;
 
 use std::process::{Command as Process, ExitCode};
 use std::time::Duration;
@@ -60,7 +61,12 @@ fn run(cli: Cli, cancel: &CancelToken) -> Result<()> {
         Command::Doctor => doctor(&cli.global),
         processing => {
             let ctx = edit::Ctx { cancel, overwrite: cli.global.overwrite, verbose: cli.global.verbose };
-            edit::run(processing, &ctx)?;
+            match processing {
+                speech @ (Command::Transcribe { .. } | Command::Captions { .. } | Command::Models { .. }) => {
+                    speech::run(speech, &ctx)?
+                }
+                other => edit::run(other, &ctx)?,
+            }
         }
     }
     Ok(())

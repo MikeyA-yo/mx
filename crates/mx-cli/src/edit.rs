@@ -346,7 +346,7 @@ fn print_levels(report: &SilenceReport, args: &SilenceArgs) {
 }
 
 /// Fail before any slow work (encoder detection, pass 1) rather than after.
-fn check_output(output: &Path, ctx: &Ctx) -> Result<()> {
+pub(crate) fn check_output(output: &Path, ctx: &Ctx) -> Result<()> {
     if output.exists() && !ctx.overwrite {
         bail!("{} already exists (pass -y to replace it)", output.display());
     }
@@ -355,7 +355,7 @@ fn check_output(output: &Path, ctx: &Ctx) -> Result<()> {
 
 /// Pick the encoder for an output `output_height` pixels tall (None if
 /// unknown): an explicit `-e`, else the best working one for the codec.
-fn resolve_encoder(args: &EncodeArgs, output_height: Option<u32>) -> Result<VideoEncode> {
+pub(crate) fn resolve_encoder(args: &EncodeArgs, output_height: Option<u32>) -> Result<VideoEncode> {
     let mut why = String::new();
     let encoder = match &args.encoder {
         Some(name) => Encoder::lookup(name).ok_or_else(|| {
@@ -394,7 +394,7 @@ fn video_height(input: &Path) -> Option<u32> {
     ffmpeg::probe(input).ok()?.video()?.height
 }
 
-fn run_job(ctx: &Ctx, label: &str, job: Job) -> Result<()> {
+pub(crate) fn run_job(ctx: &Ctx, label: &str, job: Job) -> Result<()> {
     let job = job.overwrite(ctx.overwrite);
     if ctx.verbose {
         let line: Vec<_> = job.command_line().iter().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -406,7 +406,7 @@ fn run_job(ctx: &Ctx, label: &str, job: Job) -> Result<()> {
     result
 }
 
-fn progress_bar(label: &str) -> ProgressBar {
+pub(crate) fn progress_bar(label: &str) -> ProgressBar {
     let bar = ProgressBar::new(1000);
     bar.set_style(bar_style("{spinner} {prefix:<10} [{bar:30}] {percent:>3}% {msg}"));
     bar.set_prefix(label.to_string());
@@ -414,7 +414,7 @@ fn progress_bar(label: &str) -> ProgressBar {
     bar
 }
 
-fn show_progress(bar: &ProgressBar, p: &Progress) {
+pub(crate) fn show_progress(bar: &ProgressBar, p: &Progress) {
     if let Some(pct) = p.percent {
         bar.set_position((pct * 10.0) as u64);
     }
@@ -440,7 +440,7 @@ fn show_progress(bar: &ProgressBar, p: &Progress) {
 }
 
 /// Run `work`, then report time, size change and what's in the output.
-fn finish(input: &Path, output: &Path, work: impl FnOnce() -> Result<()>) -> Result<()> {
+pub(crate) fn finish(input: &Path, output: &Path, work: impl FnOnce() -> Result<()>) -> Result<()> {
     let started = Instant::now();
     work()?;
     let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);

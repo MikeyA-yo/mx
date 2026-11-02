@@ -188,6 +188,53 @@ pub enum Command {
         #[command(flatten)]
         encode: EncodeArgs,
     },
+    /// Transcribe speech into subtitles (.srt, .vtt, .txt or .json)
+    Transcribe {
+        input: PathBuf,
+        /// Output file; the extension picks the format [default: input name with .srt]
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[command(flatten)]
+        speech: SpeechArgs,
+    },
+    /// Burn styled captions into a video (transcribes it unless --subs is given)
+    Captions {
+        input: PathBuf,
+        output: PathBuf,
+        /// Burn these subtitles (SRT or WebVTT) instead of transcribing
+        #[arg(long, value_name = "FILE")]
+        subs: Option<PathBuf>,
+        /// Also save the transcript beside the output as .srt
+        #[arg(long, conflicts_with = "subs")]
+        save_srt: bool,
+        /// Most words on screen at once
+        #[arg(long, default_value_t = 4)]
+        words: usize,
+        /// Text height as a percentage of the frame's shorter side
+        #[arg(long, default_value_t = 7.5)]
+        size: f64,
+        /// Where the bottom of the text sits, 0 (top) to 1 (bottom) [default: 0.72 portrait, 0.9 landscape]
+        #[arg(long)]
+        position: Option<f64>,
+        #[arg(long, default_value = "Arial")]
+        font: String,
+        /// CAPITAL LETTERS
+        #[arg(long)]
+        upper: bool,
+        /// Don't animate phrases in
+        #[arg(long)]
+        no_pop: bool,
+        #[command(flatten)]
+        speech: SpeechArgs,
+        #[command(flatten)]
+        encode: EncodeArgs,
+    },
+    /// List speech models, or download one ahead of time
+    Models {
+        /// Download this model now instead of on first use, e.g. small.en
+        #[arg(long, value_name = "MODEL")]
+        download: Option<String>,
+    },
     /// Shrink a file to fit a size limit (two-pass encode)
     Compress {
         input: PathBuf,
@@ -281,6 +328,23 @@ pub struct SilenceArgs {
     /// Silence left at each side of a cut, in seconds, so speech isn't clipped
     #[arg(long, default_value_t = 0.1)]
     pub padding: f64,
+}
+
+/// Speech recognition settings.
+#[derive(Args)]
+pub struct SpeechArgs {
+    /// Whisper model (see `mx models`) or a path to a ggml .bin file
+    /// [default: base, or base.en with --language en]
+    #[arg(short, long)]
+    pub model: Option<String>,
+
+    /// Spoken language: auto, or a code like en, fr, es, yo
+    #[arg(short, long, default_value = "auto")]
+    pub language: String,
+
+    /// Run whisper on the CPU only (the GPU is usually several times faster)
+    #[arg(long)]
+    pub no_gpu: bool,
 }
 
 /// Encoder choice for every command that re-encodes video.

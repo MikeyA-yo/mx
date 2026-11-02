@@ -10,6 +10,8 @@ pub mod cancel;
 pub mod error;
 pub mod ffmpeg;
 pub mod platform;
+pub mod speech;
+pub mod temp;
 pub mod timeline;
 pub mod units;
 pub mod ytdlp;

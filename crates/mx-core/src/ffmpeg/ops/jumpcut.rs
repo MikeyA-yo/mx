@@ -18,12 +18,13 @@
 //! Cuts land inside pauses, so both sides of each join are quiet and the
 //! audio needs no crossfade to avoid clicks.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use super::{VideoEncode, aac, audio_codec, finish};
 use crate::ffmpeg::{Job, probe};
+use crate::temp::TempFile;
 use crate::timeline::{Range, total};
 
 /// A rendered-to-be jump cut. Holds the filter script file, which is
@@ -34,21 +35,12 @@ pub struct JumpCut {
     /// The ranges actually kept, after snapping to video frames.
     pub kept: Vec<Range>,
     /// Held only so the file is deleted when the job is done with.
-    _script: ScriptFile,
+    _script: TempFile,
 }
 
 impl JumpCut {
     pub fn output_duration(&self) -> f64 {
         total(&self.kept)
-    }
-}
-
-#[derive(Debug)]
-struct ScriptFile(PathBuf);
-
-impl Drop for ScriptFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -128,18 +120,12 @@ pub fn jumpcut(input: &Path, output: &Path, keep: &[Range], video: Option<VideoE
 
     // Hundreds of ranges overflow Windows' 32k command-line limit, so the
     // graph goes in a file, loaded with ffmpeg 7+'s `-/option file` syntax.
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let script = ScriptFile(std::env::temp_dir().join(format!("mx-jumpcut-{}-{nonce}.txt", std::process::id())));
-    std::fs::write(&script.0, filter_script(&kept, video_rate))
-        .with_context(|| format!("couldn't write {}", script.0.display()))?;
+    let script = TempFile::with_contents("jumpcut", "txt", &filter_script(&kept, video_rate))?;
 
     let mut job = Job::new(output)
         .input(input)
         .arg("-/filter_complex")
-        .arg(&script.0)
+        .arg(script.path())
         .duration(total(&kept));
     job = match (video_rate, video) {
         (Some(_), Some(video)) => job.args(["-map", "[v]", "-map", "[a]"]).args(video.args()).args(aac(192)),

@@ -14,6 +14,9 @@ of every file it saves. Running yt-dlp as a separate process means
 - `yt-dlp`: `pip install -U "yt-dlp[default,curl-cffi]"`. Found on PATH, through `YTDLP_PATH`, or as `python -m yt_dlp`.
 - `ffmpeg` + `ffprobe` on PATH (or `FFMPEG_PATH` / `FFPROBE_PATH`).
 - `deno`: yt-dlp needs a JS runtime for YouTube.
+- For `transcribe`/`captions`: an ffmpeg 8 build with the `whisper` filter (the gyan.dev
+  "full" build has it). The speech model downloads on first use, to
+  `%LOCALAPPDATA%\mx\models` (or `~/.cache/mx/models`; override with `MX_MODELS_DIR`).
 
 Run `mx doctor` to check all of them.
 
@@ -57,6 +60,13 @@ mx highlights film.mp4                                 # the 3 most eventful 30 
 mx highlights film.mp4 -n 5 -l 20 --to 7:15            # search only before the credits
 mx highlights film.mp4 --export clips --vertical       # render them as 9:16 Shorts
 mx gif in.mp4 loop.gif --from 5 --to 9 --fps 15 --width 480
+
+mx transcribe talk.mp4                                 # -> talk.srt (also .vtt, .txt, .json with -o)
+mx transcribe talk.mp4 -l en -m small.en               # English-only model, more accurate
+mx captions short.mp4 captioned.mp4                    # transcribe + burn in Shorts-style captions
+mx captions short.mp4 captioned.mp4 --upper --words 3 --save-srt
+mx captions in.mp4 out.mp4 --subs fixed.srt            # burn in subtitles you've corrected
+mx models                                              # speech models: sizes, what's installed
 ```
 
 Every command that re-encodes takes `-c h264|hevc|av1`, `-e <encoder>`, `--cpu`
@@ -97,6 +107,24 @@ tutorial, what makes a moment good is what's said; transcripts will cover
 that. Measuring takes about a minute per 10 minutes of 720p (two ffmpeg
 processes, audio and video in parallel) and is cached, so re-running with
 different options is instant.
+
+**Transcription.** ffmpeg's `whisper` filter runs whisper.cpp, which
+always processes a 30 s window however little audio it gets. The filter's
+default 3 s queue therefore costs a full window per 3 s (about realtime), and
+transcribes each 3 s piece without context, so words break at the seams.
+Its voice detection fixes the seams but ran at 0.05x realtime. So `mx` cuts
+the audio at pauses into chunks of up to 29 s, pads each to exactly 30 s, and
+transcribes them all in one ffmpeg run, mapping times back per chunk. With
+base.en on an Intel laptop GPU that's about 3x realtime (the CPU alone is 4x
+slower). Use `-m small.en` or larger when accuracy matters more: base heard
+"epoll" as "E-Pul".
+
+**Captions** are short phrases (up to `--words`, breaking at commas and full
+stops) in big outlined text that pops in, higher up on vertical video to
+stay clear of Shorts/TikTok buttons. whisper only gives sentence-level times,
+so each phrase gets a share of its sentence's time by length. Audio is
+copied, not re-encoded. To fix mistakes, `--save-srt`, edit the .srt, and
+burn it with `--subs`.
 
 **Trim modes.** Without re-encoding, a cut can only start on a keyframe.
 `--fast` looks up that keyframe, cuts from it and tells you where it is. The
@@ -153,6 +181,7 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 | `crates/mx-core/src/ffmpeg/encoders.rs` | encoder catalogue, runtime detection, quality flags per backend |
 | `crates/mx-core/src/ffmpeg/ops/` | ready-made jobs: transcode, remux, trim, reframe, clip, jumpcut, compress, speed, gif |
 | `crates/mx-core/src/analysis/` | measurements and decisions: loudness, motion and scene cuts, silences, highlights |
+| `crates/mx-core/src/speech/` | whisper models, transcription, subtitle files, caption styling |
 | `crates/mx-core/src/timeline.rs` | time ranges, the building block of edit lists |
 | `crates/mx-core/src/ffmpeg/probe.rs` | ffprobe |
 | `crates/mx-core/src/process.rs` | shared subprocess streaming, cancellable |
@@ -164,6 +193,6 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 
 1. **Adaptive streaming**: encode a 1080/720/480/240 ladder with aligned keyframes, package as HLS/DASH.
 2. **Auto-highlights**: done for activity (loudness, motion, cuts); next, transcript-aware picks.
-3. **Subtitles**: Whisper → SRT, optional translation, burned-in styled captions.
+3. **Subtitles**: done (Whisper → SRT/VTT, styled burn-in); next, transcript-aware highlights.
 4. **Live recorder**: watch a channel, record when it goes live, handle stream drops.
 5. **Enhancement**: Real-ESRGAN upscaling, RIFE interpolation, Demucs stem separation.

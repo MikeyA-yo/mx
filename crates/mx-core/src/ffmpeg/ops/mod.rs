@@ -4,6 +4,7 @@
 //! Inputs are probed up front so every job knows its output duration, and
 //! therefore reports a real percentage even when it changes the length.
 
+mod burn;
 mod clip;
 mod compress;
 mod gif;
@@ -13,6 +14,7 @@ mod remux;
 mod speed;
 mod trim;
 
+pub use burn::burn_subtitles;
 pub use clip::{Frame, clip};
 pub use compress::{Compress, CompressCodec, CompressOutcome, CompressPlan, compress, plan_compression};
 pub use gif::{GifOptions, gif};
