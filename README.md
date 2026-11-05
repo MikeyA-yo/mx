@@ -1,6 +1,7 @@
 # mx — media extractor & processor
 
-A Rust CLI that drives **yt-dlp** for extraction and **ffmpeg** for processing.
+A Rust CLI and desktop editor that drive **yt-dlp** for extraction and
+**ffmpeg** for processing.
 
 yt-dlp already has ~1800 site extractors (YouTube, TikTok, Instagram, X, Facebook,
 Reddit, Twitch, Vimeo, SoundCloud, ...), so `mx` doesn't reimplement them. It runs
@@ -167,6 +168,46 @@ these browsers lock the cookie file while running, and Chrome 127+ encrypts
 cookies in a way yt-dlp can't read. Use Firefox, or export a `cookies.txt` with an
 extension such as "Get cookies.txt LOCALLY" and pass `--cookies`.
 
+## Desktop editor
+
+`desktop/` is a Tauri app on the same engine: download from a link, then
+edit on a timeline and export once.
+
+- **Cut**: find pauses and jump-cut them (sliders for the shortest pause,
+  the breathing room kept and the threshold), or drag on the timeline and
+  press <kbd>X</kbd>.
+- **Text**: transcribe, then edit the video by deleting lines from the
+  transcript. Burn the rest in as styled captions; the preview shows them
+  where and how they'll be drawn.
+- **Highlights**: the liveliest stretches, marked on the timeline, exported
+  as clips.
+- **Frame**: 9:16, 1:1, 4:5 or 16:9 with a blurred background, a crop
+  (with position) or bars, previewed live.
+- **Export**: every cut, the frame and the captions in **one encode**
+  (`ops::render`), optionally two-passed under a file size. GIFs from the
+  selection.
+
+Keys: <kbd>Space</kbd> play, <kbd>←</kbd>/<kbd>→</kbd> 1 s (<kbd>Shift</kbd> 5 s),
+<kbd>,</kbd>/<kbd>.</kbd> one frame, <kbd>I</kbd>/<kbd>O</kbd> selection start/end,
+<kbd>X</kbd> cut the selection, <kbd>Ctrl+Z</kbd> undo.
+
+Files the web view can't play (HEVC, 10-bit, mkv) get a preview: mkv is
+remuxed to mp4 in seconds; anything else becomes a 540p proxy with a
+keyframe every half second for quick scrubbing. Previews, thumbnails,
+loudness, highlight measurements and transcripts are cached per file in
+`%TEMP%\mx-cache`, so reopening a file is instant.
+
+```sh
+cd desktop
+npm install
+npm run tauri dev       # run it
+npm run tauri build     # installer in target/release/bundle/nsis
+```
+
+It builds with either Rust toolchain on Windows. On the GNU toolchain it
+needs MinGW's `windres` (MSYS2's mingw64 has it), and `WebView2Loader.dll`
+from `target/<profile>/` must sit next to the exe.
+
 ## Layout
 
 This is a Cargo workspace. `mx-core` is the engine. Every front end (the CLI
@@ -182,17 +223,22 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 | `crates/mx-core/src/ffmpeg/ops/` | ready-made jobs: transcode, remux, trim, reframe, clip, jumpcut, compress, speed, gif |
 | `crates/mx-core/src/analysis/` | measurements and decisions: loudness, motion and scene cuts, silences, highlights |
 | `crates/mx-core/src/speech/` | whisper models, transcription, subtitle files, caption styling |
-| `crates/mx-core/src/timeline.rs` | time ranges, the building block of edit lists |
+| `crates/mx-core/src/timeline.rs` | time ranges, the building block of edit lists; mapping source time to output time |
 | `crates/mx-core/src/ffmpeg/probe.rs` | ffprobe |
 | `crates/mx-core/src/process.rs` | shared subprocess streaming, cancellable |
 | `crates/mx-core/src/{platform,error}.rs` | site detection; yt-dlp errors → fixes |
 | `crates/mx-core/src/units.rs` | parsing times (1:30) and sizes (10MB) |
+| `crates/mx-core/src/ffmpeg/ops/render.rs` | one-pass render of an edit: kept ranges, frame, burned-in subtitles |
+| `crates/mx-core/src/cache.rs` | per-file results kept between runs (measurements, previews, transcripts) |
 | `crates/mx-cli/` | the `mx` binary: arguments (`cli.rs`), processing commands (`edit.rs`), output |
+| `desktop/src-tauri/` | the desktop app's Rust side: commands over mx-core, and a task registry for progress and cancel |
+| `desktop/src/` | the desktop UI (React + TypeScript): download, editor, timeline, panels |
 
 ## Roadmap
 
 1. **Adaptive streaming**: encode a 1080/720/480/240 ladder with aligned keyframes, package as HLS/DASH.
 2. **Auto-highlights**: done for activity (loudness, motion, cuts); next, transcript-aware picks.
-3. **Subtitles**: done (Whisper → SRT/VTT, styled burn-in); next, transcript-aware highlights.
-4. **Live recorder**: watch a channel, record when it goes live, handle stream drops.
-5. **Enhancement**: Real-ESRGAN upscaling, RIFE interpolation, Demucs stem separation.
+3. **Subtitles**: done (Whisper → SRT/VTT, styled burn-in, editing by transcript); next, word-level timing.
+4. **Desktop editor**: first version done; next, multiple clips on one timeline, music and text overlays.
+5. **Live recorder**: watch a channel, record when it goes live, handle stream drops.
+6. **Enhancement**: Real-ESRGAN upscaling, RIFE interpolation, Demucs stem separation.

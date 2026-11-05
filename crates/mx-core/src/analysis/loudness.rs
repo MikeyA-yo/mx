@@ -37,6 +37,32 @@ impl Envelope {
     pub fn levels(&self) -> impl Iterator<Item = f64> + '_ {
         self.points.iter().map(|&(_, db)| db)
     }
+
+    /// The loudest level in each of `bins` equal slices of `duration`,
+    /// scaled to 0..=1: what a waveform overview draws.
+    ///
+    /// Levels become amplitude relative to the recording's loud end (its
+    /// 99.5th percentile, so one spike doesn't flatten the rest), with a
+    /// gentle curve. On a dB scale speech sits within a few dB of the top
+    /// everywhere and the overview is a solid block; on amplitude the
+    /// words and the pauses between them stand apart.
+    pub fn overview(&self, duration: f64, bins: usize) -> Vec<f32> {
+        if bins == 0 || duration <= 0.0 {
+            return Vec::new();
+        }
+        let mut peaks = vec![SILENCE_DB; bins];
+        for &(t, db) in &self.points {
+            let i = ((t / duration * bins as f64) as usize).min(bins - 1);
+            peaks[i] = peaks[i].max(db);
+        }
+        let mut sorted: Vec<f64> = self.levels().filter(|&db| db > SILENCE_DB).collect();
+        if sorted.is_empty() {
+            return vec![0.0; bins];
+        }
+        sorted.sort_by(f64::total_cmp);
+        let top = super::silence::percentile(&sorted, 0.995);
+        peaks.iter().map(|&db| (10f64.powf((db - top) / 20.0).min(1.0).powf(0.6)) as f32).collect()
+    }
 }
 
 /// Parse `ametadata` output: a `frame:N pts:P pts_time:T` line, then the
@@ -98,5 +124,15 @@ mod tests {
                    lavfi.astats.Overall.RMS_level=-26.808652\n";
         let env = parse_lines(out.lines());
         assert_eq!(env.points, [(0.0065, SILENCE_DB), (0.0275, -31.104177), (0.0475, -26.808652)]);
+    }
+
+    #[test]
+    fn overview_scales_bins_between_floor_and_peak() {
+        let points = (0..100).map(|i| (i as f64 * 0.1, if i < 50 { -60.0 } else { -20.0 })).collect();
+        let o = Envelope { points }.overview(10.0, 4);
+        assert_eq!(o.len(), 4);
+        assert!(o[0] < 0.1 && o[1] < 0.1, "{o:?}");
+        assert!((o[3] - 1.0).abs() < 1e-6, "{o:?}");
+        assert!(Envelope::default().overview(10.0, 3).iter().all(|&v| v == 0.0));
     }
 }

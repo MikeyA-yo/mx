@@ -18,6 +18,9 @@ pub struct MediaInfo {
     pub kind: Option<String>,
     pub extractor_key: Option<String>,
     pub uploader: Option<String>,
+    /// Cover image URL.
+    pub thumbnail: Option<String>,
+    pub webpage_url: Option<String>,
     pub channel: Option<String>,
     pub upload_date: Option<String>,
     pub duration: Option<f64>,

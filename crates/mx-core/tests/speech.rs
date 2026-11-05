@@ -3,21 +3,13 @@
 //! whisper model is already installed: tests never download models.
 
 use std::path::PathBuf;
-use std::process::Command;
 
 use mx_core::CancelToken;
 use mx_core::ffmpeg::encoders::Encoder;
 use mx_core::ffmpeg::ops::{VideoEncode, burn_subtitles};
-use mx_core::ffmpeg::{Job, probe};
+use mx_core::ffmpeg::{Job, has_filter, probe};
 use mx_core::speech::{CaptionStyle, Model, TranscribeOptions, cues, to_ass, transcribe};
 use mx_core::temp::TempFile;
-
-fn has_filter(name: &str) -> bool {
-    Command::new("ffmpeg")
-        .args(["-hide_banner", "-h", &format!("filter={name}")])
-        .output()
-        .is_ok_and(|o| !String::from_utf8_lossy(&o.stdout).contains("Unknown filter"))
-}
 
 #[test]
 fn transcribes_speech_and_burns_it_in() {

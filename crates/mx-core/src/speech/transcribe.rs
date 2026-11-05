@@ -39,6 +39,45 @@ pub struct Transcript {
     pub segments: Vec<Segment>,
 }
 
+impl Transcript {
+    /// The source time to cut so that the segments at `removed` (indices)
+    /// are gone: editing video by deleting its text. Consecutive removed
+    /// segments become one cut, including the pause between them.
+    pub fn cuts(&self, removed: &[usize]) -> Vec<Range> {
+        let mut removed: Vec<usize> = removed.iter().copied().filter(|&i| i < self.segments.len()).collect();
+        removed.sort_unstable();
+        removed.dedup();
+        let mut cuts: Vec<(usize, Range)> = Vec::new();
+        for i in removed {
+            let s = &self.segments[i];
+            match cuts.last_mut() {
+                Some((last, range)) if *last + 1 == i => {
+                    range.end = range.end.max(s.end);
+                    *last = i;
+                }
+                _ => cuts.push((i, Range::new(s.start, s.end))),
+            }
+        }
+        cuts.into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// This transcript timed on the output of an edit that keeps `keep`:
+    /// segments that were cut are dropped, the rest move up to where they
+    /// now play.
+    pub fn retimed(&self, keep: &[Range]) -> Transcript {
+        let segments = self
+            .segments
+            .iter()
+            .filter_map(|s| {
+                let pieces = crate::timeline::map_range(keep, Range::new(s.start, s.end));
+                let (first, last) = (pieces.first()?, pieces.last()?);
+                Some(Segment { start: first.start, end: last.end, text: s.text.clone() })
+            })
+            .collect();
+        Transcript { segments }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TranscribeOptions {
     /// "auto" to detect (multilingual models only), or a code like "en".
@@ -259,5 +298,29 @@ mod tests {
         assert!(s.contains("asplit=2[s0][s1];"), "{s}");
         assert!(s.contains("[s1]atrim=start=12.000000:end=20.000000,asetpts=PTS-STARTPTS,apad=whole_len=480000[p1]"), "{s}");
         assert!(s.contains("[p0][p1]concat=n=2:v=0:a=1,asetnsamples=n=1600,whisper=model='m.bin':language=en:use_gpu=1:queue=30"), "{s}");
+    }
+
+    fn seg(start: f64, end: f64, text: &str) -> Segment {
+        Segment { start, end, text: text.into() }
+    }
+
+    #[test]
+    fn deleting_text_cuts_its_time_and_joins_neighbours() {
+        let t = Transcript { segments: vec![seg(0.0, 2.0, "a"), seg(2.5, 4.0, "b"), seg(4.2, 6.0, "c"), seg(7.0, 9.0, "d")] };
+        let cuts = t.cuts(&[2, 1, 3, 1, 99]);
+        // b and c are consecutive, so the pause between them goes too;
+        // d is its own cut. Out-of-range and repeated indices are ignored.
+        assert_eq!(cuts, [Range::new(2.5, 9.0)]);
+        assert_eq!(t.cuts(&[0, 2]), [Range::new(0.0, 2.0), Range::new(4.2, 6.0)]);
+    }
+
+    #[test]
+    fn retiming_drops_cut_segments_and_moves_the_rest_up() {
+        let t = Transcript { segments: vec![seg(0.0, 2.0, "a"), seg(2.5, 4.0, "b"), seg(4.2, 6.0, "c")] };
+        let keep = crate::timeline::keep_ranges(6.0, &t.cuts(&[1]), 0.0);
+        let r = t.retimed(&keep);
+        assert_eq!(r.segments.len(), 2);
+        let c = &r.segments[1];
+        assert!(c.text == "c" && (c.start - 2.7).abs() < 1e-9 && (c.end - 4.5).abs() < 1e-9, "{c:?}");
     }
 }

@@ -46,8 +46,11 @@ pub struct CompressPlan {
     pub duration_secs: f64,
     pub video_kbps: u32,
     pub audio_kbps: u32,
-    /// Downscale to this height, or `None` to keep the source resolution.
-    pub height: Option<u32>,
+    /// Downscale so the shorter side is this long ("720p" is 1280x720
+    /// landscape, 720x1280 portrait), or `None` to keep the resolution.
+    pub short_edge: Option<u32>,
+    /// Whether the source is portrait, so `short_edge` is its width.
+    pub portrait: bool,
     /// Cap the frame rate, or `None` to keep the source's.
     pub fps: Option<u32>,
     /// Downmix surround to stereo: 5.1 at 64-128 kb/s wastes the budget.
@@ -83,16 +86,21 @@ pub fn plan_compression(target_bytes: u64, source: &Probe, codec: CompressCodec)
         );
     }
 
-    let mut height = None;
+    let mut short_edge = None;
     let mut fps_cap = None;
+    let mut portrait = false;
     if let Some(v) = source.video()
         && let (Some(src_w), Some(src_h)) = (v.width, v.height)
     {
+        // The ladder is in "p": the shorter side, whichever way up.
+        portrait = src_h > src_w;
+        let (src_short, src_long) = (src_w.min(src_h), src_w.max(src_h));
         let src_fps = v.fps().unwrap_or(30.0);
-        let fits = |h: u32, fps: f64| {
-            let w = src_w as f64 * h as f64 / src_h as f64;
-            video_kbps * 1000.0 / (w * h as f64 * fps) >= codec.min_bits_per_pixel()
+        let fits = |short: u32, fps: f64| {
+            let long = src_long as f64 * short as f64 / src_short as f64;
+            video_kbps * 1000.0 / (long * short as f64 * fps) >= codec.min_bits_per_pixel()
         };
+        let src_h = src_short;
         if !fits(src_h, src_fps) {
             // Halving 60 -> 30 fps halves the pixels per second; try that
             // before giving up resolution.
@@ -110,7 +118,7 @@ pub fn plan_compression(target_bytes: u64, source: &Probe, codec: CompressCodec)
                     .filter(|&h| h < src_h)
                     .find(|&h| fits(h, fps))
                     .unwrap_or(LADDER[LADDER.len() - 1]);
-                height = Some(rung.min(src_h));
+                short_edge = Some(rung.min(src_h));
             }
         }
     }
@@ -121,7 +129,8 @@ pub fn plan_compression(target_bytes: u64, source: &Probe, codec: CompressCodec)
         duration_secs: duration,
         video_kbps: video_kbps as u32,
         audio_kbps,
-        height,
+        short_edge,
+        portrait,
         fps: fps_cap,
         stereo: max_channels > 2,
     })
@@ -208,9 +217,12 @@ impl Compress {
         if let Some(fps) = self.plan.fps {
             filters.push(format!("fps={fps}"));
         }
-        if let Some(h) = self.plan.height {
-            // -2: the width that keeps the aspect ratio and is even.
-            filters.push(format!("scale=-2:{h}"));
+        if let Some(short) = self.plan.short_edge {
+            // -2: the other side, keeping the aspect ratio and even.
+            filters.push(match self.plan.portrait {
+                true => format!("scale={short}:-2"),
+                false => format!("scale=-2:{short}"),
+            });
         }
         if !filters.is_empty() {
             args.extend(["-vf".to_string(), filters.join(",")]);
@@ -324,7 +336,7 @@ mod tests {
     fn generous_budget_keeps_everything() {
         // 100 MB for 60 s = ~12.9 Mbit/s total.
         let plan = plan_compression(100_000_000, &landscape(60.0, 1080, 30, 2), CompressCodec::H264).unwrap();
-        assert_eq!((plan.audio_kbps, plan.height, plan.fps, plan.stereo), (128, None, None, false));
+        assert_eq!((plan.audio_kbps, plan.short_edge, plan.fps, plan.stereo), (128, None, None, false));
     }
 
     #[test]
@@ -333,15 +345,28 @@ mod tests {
         // budget only affords 240p; at 30 fps it affords 480p.
         let plan = plan_compression(3_000_000, &landscape(30.0, 720, 60, 6), CompressCodec::H264).unwrap();
         assert_eq!(plan.fps, Some(30));
-        assert_eq!(plan.height, Some(480));
+        assert_eq!(plan.short_edge, Some(480));
         assert!(plan.stereo);
+    }
+
+    #[test]
+    fn portrait_video_steps_down_its_short_side() {
+        // The 3 MB / 30 s / 720p60 case above, turned on its side.
+        let src = source(
+            r#"{"format":{"duration":"30"},"streams":[
+                {"index":0,"codec_type":"video","width":720,"height":1280,"avg_frame_rate":"60/1"}]}"#,
+        );
+        let plan = plan_compression(3_000_000, &src, CompressCodec::H264).unwrap();
+        assert_eq!((plan.short_edge, plan.portrait), (Some(480), true));
+        let s = crate::ffmpeg::ops::args_of(&compress(Path::new("in.mp4"), Path::new("out.mp4"), plan, CompressCodec::H264).first_pass());
+        assert!(s.contains("scale=480:-2"), "{s}");
     }
 
     #[test]
     fn hevc_affords_more_pixels_for_the_same_budget() {
         let h264 = plan_compression(10_000_000, &landscape(120.0, 1080, 30, 2), CompressCodec::H264).unwrap();
         let hevc = plan_compression(10_000_000, &landscape(120.0, 1080, 30, 2), CompressCodec::Hevc).unwrap();
-        assert!(hevc.height.unwrap() > h264.height.unwrap(), "{hevc:?} vs {h264:?}");
+        assert!(hevc.short_edge.unwrap() > h264.short_edge.unwrap(), "{hevc:?} vs {h264:?}");
     }
 
     #[test]

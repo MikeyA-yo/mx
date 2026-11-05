@@ -9,7 +9,7 @@ use indicatif::{DecimalBytes, HumanBytes, ProgressBar};
 
 use crate::cli::{CodecArg, Command, CompressCodecArg, EncodeArgs, FitArg, SilenceArgs};
 use crate::{bar_style, display};
-use mx_core::{CancelToken, Cancelled};
+use mx_core::{CancelToken, Cancelled, cache};
 use mx_core::ffmpeg::ops::{self, Aspect, CompressCodec, Cut, Fit, Frame, GifOptions, VideoEncode};
 use mx_core::ffmpeg::{self, Job, Progress, encoders, encoders::Codec, encoders::Encoder};
 use mx_core::analysis::{
@@ -245,37 +245,15 @@ fn print_highlights(signals: &Signals, found: &[Highlight]) {
     }
 }
 
-/// Measuring a long video takes a minute or more, and the usual workflow
-/// runs `highlights` a few times (look, adjust --from/--to, then export),
-/// so measurements are kept in the temp directory. The key includes the
-/// file's size and modification time, so an edited file is measured again.
+/// The usual workflow runs `highlights` a few times (look, adjust
+/// --from/--to, then export), so measurements are cached.
 fn cached_signals(ctx: &Ctx, input: &Path) -> Result<Signals> {
-    use std::hash::{Hash, Hasher};
-
-    const VERSION: u32 = 1; // bump when what's measured changes
-    let meta = std::fs::metadata(input)?;
-    let mut key = std::collections::hash_map::DefaultHasher::new();
-    (VERSION, std::fs::canonicalize(input)?, meta.len(), meta.modified().ok()).hash(&mut key);
-    let path = std::env::temp_dir().join("mx-cache").join(format!("signals-{:016x}.json", key.finish()));
-
-    if let Some(signals) = std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()) {
-        if ctx.verbose {
-            eprintln!("using cached measurements from {}", path.display());
-        }
-        return Ok(signals);
-    }
-    let bar = progress_bar("analyse");
-    let signals = analysis::measure_signals(input, ctx.cancel, |p| show_progress(&bar, p));
-    bar.finish_and_clear();
-    let signals = signals?;
-    // A failed write only costs the next run its speed-up.
-    if let Some(dir) = path.parent()
-        && std::fs::create_dir_all(dir).is_ok()
-        && let Ok(json) = serde_json::to_vec(&signals)
-    {
-        let _ = std::fs::write(&path, json);
-    }
-    Ok(signals)
+    cache::json(analysis::highlights::CACHE_KIND, analysis::highlights::CACHE_VERSION, input, || {
+        let bar = progress_bar("analyse");
+        let signals = analysis::measure_signals(input, ctx.cancel, |p| show_progress(&bar, p));
+        bar.finish_and_clear();
+        signals
+    })
 }
 
 fn export_highlights(
@@ -468,8 +446,8 @@ fn compress(ctx: &Ctx, input: &Path, output: &Path, target: u64, codec: Compress
     if let Some(fps) = plan.fps {
         changes.push(format!("{fps} fps"));
     }
-    if let Some(h) = plan.height {
-        changes.push(format!("{h}p"));
+    if let Some(p) = plan.short_edge {
+        changes.push(format!("{p}p"));
     }
     if plan.stereo {
         changes.push("stereo".to_string());

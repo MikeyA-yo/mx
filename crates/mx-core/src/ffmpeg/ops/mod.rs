@@ -9,8 +9,10 @@ mod clip;
 mod compress;
 mod gif;
 mod jumpcut;
+mod preview;
 mod reframe;
 mod remux;
+mod render;
 mod speed;
 mod trim;
 
@@ -18,9 +20,11 @@ pub use burn::burn_subtitles;
 pub use clip::{Frame, clip};
 pub use compress::{Compress, CompressCodec, CompressOutcome, CompressPlan, compress, plan_compression};
 pub use gif::{GifOptions, gif};
-pub use jumpcut::{JumpCut, jumpcut};
+pub use jumpcut::jumpcut;
+pub use preview::{Filmstrip, PreviewKind, filmstrip, preview};
 pub use reframe::{Aspect, Fit, reframe};
 pub use remux::{Remux, SubtitlePlan, remux, remux_with};
+pub use render::{Edit, Render, render};
 pub use speed::speed;
 pub use trim::{Cut, Trim, trim};
 

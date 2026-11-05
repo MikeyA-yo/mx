@@ -1,0 +1,172 @@
+//! Long-running work the UI can watch and stop.
+//!
+//! Every slow command runs as a task: on a worker thread, with a
+//! [`CancelToken`] registered under an id the UI chose, and reporting
+//! `task` events (one stream for downloads, exports and analysis alike)
+//! that the task list and the panels render.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use mx_core::ffmpeg::{Job, Progress};
+use mx_core::{CancelToken, Cancelled};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager};
+
+#[derive(Default)]
+pub struct Tasks(Mutex<HashMap<String, CancelToken>>);
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Status {
+    Running,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskUpdate {
+    pub id: String,
+    /// "download", "export", "analyse", "transcribe", "preview"
+    pub kind: &'static str,
+    pub title: String,
+    pub status: Status,
+    pub stage: Option<String>,
+    /// 0-100, when known.
+    pub percent: Option<f64>,
+    /// Speed, size, time left.
+    pub detail: Option<String>,
+    /// The file a finished task produced.
+    pub output: Option<String>,
+    pub error: Option<String>,
+}
+
+/// The running task, handed to its work closure.
+pub struct Task {
+    app: AppHandle,
+    update: TaskUpdate,
+    pub cancel: CancelToken,
+    last_sent: Instant,
+}
+
+/// Progress events more often than this are dropped: ffmpeg reports
+/// several times a second per job, and the UI only needs to look smooth.
+const THROTTLE: Duration = Duration::from_millis(150);
+
+impl Task {
+    fn send(&mut self) {
+        self.last_sent = Instant::now();
+        let _ = self.app.emit("task", &self.update);
+    }
+
+    /// Report progress. A new stage is always sent; updates within a
+    /// stage are throttled.
+    pub fn progress(&mut self, stage: &str, percent: Option<f64>, detail: Option<String>) {
+        let new_stage = self.update.stage.as_deref() != Some(stage);
+        self.update.stage = Some(stage.to_string());
+        self.update.percent = percent.map(|p| p.clamp(0.0, 100.0));
+        self.update.detail = detail;
+        if new_stage || self.last_sent.elapsed() >= THROTTLE {
+            self.send();
+        }
+    }
+
+    /// Report an ffmpeg job's progress under `stage`.
+    pub fn ffmpeg(&mut self, stage: &str, p: &Progress) {
+        let mut detail = Vec::new();
+        if let Some(speed) = p.speed.filter(|s| *s > 0.0) {
+            detail.push(format!("{speed:.1}x"));
+            if let (Some(pct), Some(t)) = (p.percent, p.out_time_secs)
+                && pct > 0.5
+            {
+                detail.push(format!("{} left", clock(t * (100.0 / pct - 1.0) / speed)));
+            }
+        }
+        self.progress(stage, p.percent, (!detail.is_empty()).then(|| detail.join(" · ")));
+    }
+
+    /// Run an ffmpeg job as this task (or one stage of it).
+    pub fn run_job(&mut self, stage: &str, job: Job) -> Result<()> {
+        let cancel = self.cancel.clone();
+        job.overwrite(true).run(&cancel, |p| self.ffmpeg(stage, p))
+    }
+
+    pub fn set_output(&mut self, path: impl Into<String>) {
+        self.update.output = Some(path.into());
+    }
+}
+
+pub fn clock(secs: f64) -> String {
+    let s = secs.max(0.0).round() as u64;
+    match s {
+        0..3600 => format!("{}:{:02}", s / 60, s % 60),
+        _ => format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60),
+    }
+}
+
+/// Run `work` on a worker thread as task `id`. Errors come back as text
+/// for the UI; a cancelled task returns the error "cancelled".
+pub async fn run<T: Send + 'static>(
+    app: AppHandle,
+    id: String,
+    kind: &'static str,
+    title: String,
+    work: impl FnOnce(&mut Task) -> Result<T> + Send + 'static,
+) -> Result<T, String> {
+    let cancel = CancelToken::new();
+    app.state::<Tasks>().0.lock().unwrap().insert(id.clone(), cancel.clone());
+    let update = TaskUpdate {
+        id: id.clone(),
+        kind,
+        title,
+        status: Status::Running,
+        stage: None,
+        percent: None,
+        detail: None,
+        output: None,
+        error: None,
+    };
+    let mut task = Task { app: app.clone(), update, cancel, last_sent: Instant::now() };
+    task.send();
+
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let result = work(&mut task);
+        (task, result)
+    })
+    .await;
+    app.state::<Tasks>().0.lock().unwrap().remove(&id);
+    let (mut task, result) = joined.map_err(|e| format!("task crashed: {e}"))?;
+
+    task.update.detail = None;
+    match &result {
+        Ok(_) => {
+            task.update.status = Status::Done;
+            task.update.percent = Some(100.0);
+        }
+        Err(e) if e.is::<Cancelled>() => task.update.status = Status::Cancelled,
+        Err(e) => {
+            task.update.status = Status::Failed;
+            task.update.error = Some(format!("{e:#}"));
+        }
+    }
+    task.send();
+    result.map_err(|e| if e.is::<Cancelled>() { "cancelled".to_string() } else { format!("{e:#}") })
+}
+
+#[tauri::command]
+pub fn cancel_task(app: AppHandle, id: String) {
+    if let Some(token) = app.state::<Tasks>().0.lock().unwrap().get(&id) {
+        token.cancel();
+    }
+}
+
+/// Run blocking `work` off the async runtime, with errors as text.
+pub async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || work().map_err(|e| format!("{e:#}")))
+        .await
+        .map_err(|e| format!("crashed: {e}"))?
+}

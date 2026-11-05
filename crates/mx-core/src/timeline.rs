@@ -2,9 +2,9 @@
 //! lists. Jump cuts produce a list of ranges to keep; highlights and the
 //! eventual timeline editor build on the same type.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Range {
     pub start: f64,
     pub end: f64,
@@ -65,9 +65,35 @@ pub fn keep_ranges(duration: f64, cuts: &[Range], padding: f64) -> Vec<Range> {
     keep
 }
 
+/// The parts of source `range` that survive an edit keeping `keep`
+/// (sorted, not overlapping), in output time.
+pub fn map_range(keep: &[Range], range: Range) -> Vec<Range> {
+    let mut out = Vec::new();
+    let mut offset = 0.0;
+    for k in keep {
+        let (start, end) = (range.start.max(k.start), range.end.min(k.end));
+        if end > start {
+            out.push(Range::new(offset + start - k.start, offset + end - k.start));
+        }
+        offset += k.len();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ranges_map_onto_the_output_timeline() {
+        let keep = [r(0.0, 2.0), r(5.0, 8.0)];
+        // Inside the second kept range: shifted back by the 3 s cut.
+        approx(&map_range(&keep, r(6.0, 7.0)), &[(3.0, 4.0)]);
+        // Spanning the cut: two pieces, meeting at the join.
+        approx(&map_range(&keep, r(1.0, 6.0)), &[(1.0, 2.0), (2.0, 3.0)]);
+        // Entirely cut.
+        assert!(map_range(&keep, r(2.5, 4.5)).is_empty());
+    }
 
     fn r(start: f64, end: f64) -> Range {
         Range::new(start, end)

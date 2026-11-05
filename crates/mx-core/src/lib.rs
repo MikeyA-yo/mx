@@ -6,6 +6,7 @@
 //! callback, so a UI can drive it from a worker thread.
 
 pub mod analysis;
+pub mod cache;
 pub mod cancel;
 pub mod error;
 pub mod ffmpeg;

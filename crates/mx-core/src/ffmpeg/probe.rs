@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -28,7 +27,7 @@ impl Probe {
 
 /// ffprobe reports most numbers as strings; we keep them that way and parse
 /// at the point of use.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ProbeFormat {
     pub format_long_name: Option<String>,
     pub duration: Option<String>,
@@ -36,7 +35,7 @@ pub struct ProbeFormat {
     pub bit_rate: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Stream {
     pub index: u32,
     pub codec_type: Option<String>,
@@ -75,7 +74,7 @@ impl Stream {
 /// If the window holds no keyframe (very long GOPs) it rescans from 0.
 pub fn keyframe_at_or_before(path: &Path, t: f64) -> Result<Option<f64>> {
     for window_start in [(t - 60.0).max(0.0), 0.0] {
-        let out = Command::new(super::tool("ffprobe"))
+        let out = crate::process::command(super::tool("ffprobe"))
             .args(["-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey"])
             .args(["-show_entries", "frame=best_effort_timestamp_time", "-of", "csv=p=0"])
             .args(["-read_intervals", &format!("{window_start}%{}", t + 0.001)])
@@ -99,7 +98,7 @@ pub fn keyframe_at_or_before(path: &Path, t: f64) -> Result<Option<f64>> {
 }
 
 pub fn probe(path: &Path) -> Result<Probe> {
-    let out = Command::new(super::tool("ffprobe"))
+    let out = crate::process::command(super::tool("ffprobe"))
         .args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams"])
         .arg(path)
         .output()

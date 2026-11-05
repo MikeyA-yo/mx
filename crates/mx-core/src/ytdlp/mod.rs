@@ -107,7 +107,7 @@ impl YtDlp {
         }
 
         for (program, prefix) in candidates {
-            let ok = Command::new(&program)
+            let ok = crate::process::command(&program)
                 .args(&prefix)
                 .arg("--version")
                 .stdout(Stdio::null())
@@ -144,7 +144,7 @@ impl YtDlp {
     }
 
     fn base_command(&self) -> Command {
-        let mut cmd = Command::new(&self.program);
+        let mut cmd = crate::process::command(&self.program);
         cmd.args(&self.prefix)
             // Child Python inherits the Windows ANSI code page otherwise, and
             // titles with emoji or CJK come back mangled.

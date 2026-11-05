@@ -1,6 +1,7 @@
 //! Shared subprocess plumbing for tools that stream line-based status on
 //! stdout (yt-dlp progress templates, ffmpeg `-progress pipe:1`).
 
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -13,6 +14,31 @@ use crate::cancel::{CancelToken, Cancelled};
 
 /// How often to check the cancel token when the child is quiet.
 const POLL: Duration = Duration::from_millis(100);
+
+/// A command for `program`. Every tool is spawned through here.
+///
+/// On Windows, a console program started from a GUI app (the desktop
+/// editor) opens a console window of its own, so a busy job flashes
+/// dozens of them. When this process has no console, children are told
+/// not to create one. A console process (the CLI) is left alone, so its
+/// children keep sharing the console and still receive Ctrl+C.
+pub(crate) fn command(program: impl AsRef<OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        unsafe extern "system" {
+            fn GetConsoleWindow() -> *mut std::ffi::c_void;
+        }
+        // SAFETY: takes no arguments and only reads process state.
+        if unsafe { GetConsoleWindow() }.is_null() {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+    }
+    cmd
+}
 
 pub struct Finished {
     pub status: ExitStatus,

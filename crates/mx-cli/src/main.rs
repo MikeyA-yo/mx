@@ -175,6 +175,11 @@ fn doctor(global: &GlobalArgs) {
     }
     check("ffmpeg", ffmpeg::version("ffmpeg"), "needed to merge video+audio and for all processing");
     check("ffprobe", ffmpeg::version("ffprobe"), "ships with ffmpeg");
+    check(
+        "speech",
+        ffmpeg::has_filter("whisper").then(|| "whisper filter (transcribe, captions)".to_string()),
+        "transcribe/captions need an ffmpeg 8 build with the whisper filter (gyan.dev full build)",
+    );
     let deno = Process::new("deno")
         .arg("--version")
         .output()

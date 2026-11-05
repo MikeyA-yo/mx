@@ -7,11 +7,11 @@
 //! Speech is close enough to constant-rate within one segment (a few
 //! seconds) for that to stay in step with the voice.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::transcribe::{Segment, Transcript};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptionStyle {
     /// Most words on screen at once.
     pub max_words: usize,

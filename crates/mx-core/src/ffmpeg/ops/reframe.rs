@@ -5,11 +5,12 @@ use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Result, anyhow, bail};
+use serde::{Deserialize, Serialize};
 
 use super::{VideoEncode, aac, finish};
 use crate::ffmpeg::Job;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Aspect {
     pub w: u32,
     pub h: u32,
@@ -43,7 +44,8 @@ impl Aspect {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Fit {
     /// Fill the frame and cut off the overflow. `position` 0.0..=1.0 picks
     /// which part survives along the overflowing axis (0.5 = centre).
@@ -55,8 +57,9 @@ pub enum Fit {
     Pad,
 }
 
-/// Graph from `[0:v:0]` to `[v]` that fills a `w`x`h` frame.
-pub(super) fn filtergraph(fit: Fit, w: u32, h: u32) -> String {
+/// Graph from the `from` pad (e.g. `0:v:0`) to the `to` pad that fills a
+/// `w`x`h` frame.
+pub(super) fn filtergraph(from: &str, to: &str, fit: Fit, w: u32, h: u32) -> String {
     // Scale the picture to fit inside / to cover the target frame.
     let contain = format!("scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2");
     let cover = |w: u32, h: u32| format!("scale={w}:{h}:force_original_aspect_ratio=increase");
@@ -65,19 +68,19 @@ pub(super) fn filtergraph(fit: Fit, w: u32, h: u32) -> String {
             let p = position.clamp(0.0, 1.0);
             // Only one of (iw-ow), (ih-oh) is non-zero after covering, so one
             // position value works for both landscape and portrait targets.
-            format!("[0:v:0]{},crop={w}:{h}:(iw-ow)*{p}:(ih-oh)*{p},setsar=1[v]", cover(w, h))
+            format!("[{from}]{},crop={w}:{h}:(iw-ow)*{p}:(ih-oh)*{p},setsar=1[{to}]", cover(w, h))
         }
-        Fit::Pad => format!("[0:v:0]{contain},pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v]"),
+        Fit::Pad => format!("[{from}]{contain},pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[{to}]"),
         Fit::Blur => {
             // Blurring a full 1080x1920 frame is slow and pointless: shrink the
             // background 8x, blur that, and scale it back up. Same look, a
             // fraction of the work.
             let (bw, bh) = ((w / 16).max(1) * 2, (h / 16).max(1) * 2);
             format!(
-                "[0:v:0]split=2[bg][fg];\
+                "[{from}]split=2[bg][fg];\
                  [bg]{},crop={bw}:{bh},boxblur=4:2,scale={w}:{h},setsar=1[bgb];\
                  [fg]{contain},setsar=1[fgs];\
-                 [bgb][fgs]overlay=(W-w)/2:(H-h)/2[v]",
+                 [bgb][fgs]overlay=(W-w)/2:(H-h)/2[{to}]",
                 cover(bw, bh)
             )
         }
@@ -97,7 +100,7 @@ pub fn reframe(
     let (w, h) = aspect.frame(short_edge);
     let job = Job::new(output)
         .input(input)
-        .args(["-filter_complex", &filtergraph(fit, w, h)])
+        .args(["-filter_complex", &filtergraph("0:v:0", "v", fit, w, h)])
         .args(["-map", "[v]", "-map", "0:a?"])
         .args(video.args())
         .args(aac(192));
@@ -124,13 +127,13 @@ mod tests {
 
     #[test]
     fn crop_position_is_applied_on_both_axes() {
-        let g = filtergraph(Fit::Crop { position: 0.25 }, 1080, 1920);
+        let g = filtergraph("0:v:0", "v", Fit::Crop { position: 0.25 }, 1080, 1920);
         assert!(g.contains("crop=1080:1920:(iw-ow)*0.25:(ih-oh)*0.25"), "{g}");
     }
 
     #[test]
     fn blur_background_is_downscaled_before_blurring() {
-        let g = filtergraph(Fit::Blur, 1080, 1920);
+        let g = filtergraph("0:v:0", "v", Fit::Blur, 1080, 1920);
         assert!(g.contains("[bg]scale=134:240:force_original_aspect_ratio=increase,crop=134:240,boxblur"), "{g}");
         assert!(g.contains("scale=1080:1920,setsar=1[bgb]"), "{g}");
     }

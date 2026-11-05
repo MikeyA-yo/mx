@@ -40,6 +40,12 @@ pub struct Signals {
     pub motion: Option<MotionTrack>,
 }
 
+/// [`crate::cache`] entry for measured [`Signals`]. The version is bumped
+/// whenever what's measured changes. Measuring a long video takes a minute
+/// or more, so every front end should go through the cache.
+pub const CACHE_KIND: &str = "signals";
+pub const CACHE_VERSION: u32 = 1;
+
 /// Measure loudness and motion at the same time (two ffmpeg processes;
 /// the video side is slower, so its progress is the one reported).
 pub fn measure_signals(input: &Path, cancel: &CancelToken, on_progress: impl FnMut(&Progress)) -> Result<Signals> {

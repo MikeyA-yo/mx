@@ -7,7 +7,6 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Result, bail};
 use serde::Serialize;
@@ -179,7 +178,7 @@ impl Job {
             bail!("{} already exists", output.display());
         }
 
-        let mut cmd = Command::new(super::tool("ffmpeg"));
+        let mut cmd = crate::process::command(super::tool("ffmpeg"));
         cmd.args(self.command_line());
         let mut parser = ProgressParser::new(duration);
         let result = process::run_streaming(cmd, cancel, |line| {

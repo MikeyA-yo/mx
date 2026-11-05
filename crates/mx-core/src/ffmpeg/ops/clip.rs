@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 
 use super::reframe::{Aspect, Fit, filtergraph};
 use super::{VideoEncode, aac, audio_codec, finish};
@@ -12,7 +13,7 @@ use crate::ffmpeg::{Job, probe};
 use crate::timeline::Range;
 
 /// A target frame shape (see [`super::reframe`]).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Frame {
     pub aspect: Aspect,
     pub fit: Fit,
@@ -48,7 +49,7 @@ pub fn clip(input: &Path, output: &Path, range: Range, frame: Option<Frame>, vid
         match frame {
             Some(f) => {
                 let (w, h) = f.aspect.frame(f.short_edge);
-                graph.push(filtergraph(f.fit, w, h));
+                graph.push(filtergraph("0:v:0", "v", f.fit, w, h));
                 maps.push("[v]");
             }
             None => maps.push("0:v:0"),

@@ -11,7 +11,6 @@ pub mod ops;
 pub mod probe;
 
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Result, bail};
 
@@ -38,9 +37,18 @@ pub(crate) fn tool(name: &str) -> String {
     std::env::var(var).unwrap_or_else(|_| name.to_string())
 }
 
+/// Whether this ffmpeg build has the filter `name`, e.g. `whisper`, which
+/// only some builds include.
+pub fn has_filter(name: &str) -> bool {
+    crate::process::command(tool("ffmpeg"))
+        .args(["-hide_banner", "-h", &format!("filter={name}")])
+        .output()
+        .is_ok_and(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).contains("Unknown filter"))
+}
+
 /// First line of `<tool> -version`, or None if the tool isn't runnable.
 pub fn version(name: &str) -> Option<String> {
-    let out = Command::new(tool(name)).arg("-version").output().ok()?;
+    let out = crate::process::command(tool(name)).arg("-version").output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     text.lines().next().map(str::to_string)
 }
