@@ -123,3 +123,65 @@ fn previews_mkv_by_remuxing_and_makes_a_filmstrip() {
     let v = img.video().unwrap();
     assert_eq!((v.width, v.height), (Some(strip.thumb_width * 10), Some(36)));
 }
+
+#[test]
+fn renders_a_project_of_mismatched_clips_with_music_and_a_title() {
+    use mx_core::project::{Clip, Music, Project, Title, titles_ass};
+    if version("ffmpeg").is_none() {
+        return;
+    }
+    let dir = dir("project");
+    // Clip a: 320x240 at 30 fps with a tone. Clip b: 640x360 at 25 fps, silent.
+    let a = dir.join("a.mp4");
+    source(&a, &["-c:a", "aac"]);
+    let b = dir.join("b.mp4");
+    Job::new(&b)
+        .args(["-f", "lavfi", "-i", "smptebars=duration=4:size=640x360:rate=25"])
+        .args(["-c:v", "libx264", "-preset", "ultrafast"])
+        .overwrite(true)
+        .run(&CancelToken::new(), |_| {})
+        .unwrap();
+    let song = dir.join("song.m4a");
+    Job::new(&song)
+        .args(["-f", "lavfi", "-i", "sine=frequency=220:duration=3", "-c:a", "aac"])
+        .overwrite(true)
+        .run(&CancelToken::new(), |_| {})
+        .unwrap();
+
+    let mut first = Clip::new(&a);
+    first.keep = vec![Range::new(1.0, 3.0), Range::new(5.0, 6.0)];
+    let mut second = Clip::new(&b);
+    second.titles = vec![Title {
+        text: "Part two".into(),
+        start: 0.0,
+        end: 3.0,
+        x: 0.5,
+        y: 0.3,
+        size: 0.1,
+        color: "#ffffff".into(),
+        font: "Arial".into(),
+        boxed: true,
+    }];
+    let project = Project {
+        clips: vec![first, second],
+        frame: Some(Frame { aspect: Aspect { w: 9, h: 16 }, fit: Fit::Blur, short_edge: 240 }),
+        // Shorter than the video: it loops.
+        music: Some(Music { source: song, offset: 0.0, volume: 0.3, duck: true, fade_out: 1.0 }),
+    };
+    let layout = project.layout(&[10.0, 4.0]);
+    let titles = TempFile::with_contents("test-titles", "ass", &titles_ass(&project.clips, &layout, 240, 426)).unwrap();
+
+    let output = dir.join("project.mp4");
+    let video = VideoEncode { encoder: Encoder::lookup("libx264").unwrap(), quality: None };
+    let job = mx_core::ffmpeg::ops::render_project(&project, &[titles.path().to_path_buf()], &output, Some(video)).unwrap();
+    assert!((job.output_duration() - 7.0).abs() < 0.05, "{}", job.output_duration());
+    assert!((job.layout[1].offset - 3.0).abs() < 0.05);
+    job.job.clone().overwrite(true).run(&CancelToken::new(), |_| {}).unwrap();
+
+    let out = probe(&output).unwrap();
+    let v = out.video().unwrap();
+    assert_eq!((v.width, v.height, v.fps().map(|f| f.round())), (Some(240), Some(426), Some(30.0)));
+    let (vd, ad) = durations(&output);
+    assert!((vd - 7.0).abs() < 0.1, "video {vd}");
+    assert!((ad - vd).abs() < 0.1, "audio {ad} vs video {vd}");
+}

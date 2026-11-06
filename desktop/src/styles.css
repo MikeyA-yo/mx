@@ -873,3 +873,82 @@ kbd {
     transform: scale(1);
   }
 }
+
+.title-preview {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-weight: 700;
+  line-height: 1.15;
+  text-align: center;
+  white-space: pre;
+  paint-order: stroke fill;
+  cursor: grab;
+  border-radius: 2px;
+}
+.title-preview.selected {
+  outline: 1.5px dashed var(--accent);
+  outline-offset: 4px;
+}
+
+.sequence {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px 8px;
+  overflow-x: auto;
+}
+.seq-clip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  background: var(--raised);
+  border-radius: 7px;
+  padding: 4px 6px 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  max-width: 240px;
+  flex: none;
+}
+.seq-clip:hover {
+  border-color: var(--faint);
+}
+.seq-clip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.seq-clip .n {
+  color: var(--faint);
+  font-family: var(--mono);
+}
+.seq-clip button {
+  border: 0;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 12px;
+}
+.seq-clip button:hover {
+  color: var(--text);
+}
+.tabs button {
+  font-size: 12px;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+.mark-title {
+  position: absolute;
+  bottom: 2px;
+  height: 12px;
+  border-radius: 3px;
+  background: #f5b83d;
+  color: #1a1300;
+  font-size: 9.5px;
+  line-height: 12px;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+}

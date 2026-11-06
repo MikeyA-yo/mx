@@ -1,5 +1,5 @@
 //! Local processing commands: convert, remux, trim, reframe, silence,
-//! jumpcut, highlights, compress, speed, gif.
+//! jumpcut, highlights, compress, speed, gif, join, render.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -16,6 +16,8 @@ use mx_core::analysis::{
     self, Breakdown, Highlight, HighlightOptions, SilenceOptions, SilenceReport, Signals, Threshold, find_highlights,
     find_silences, measure_loudness,
 };
+use mx_core::project::{Clip, Music, Project};
+use mx_core::temp::TempFile;
 use mx_core::timeline::{self, Range};
 use mx_core::units::format_time;
 
@@ -124,8 +126,9 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
             }
             let cut = ops::jumpcut(&input, &output, &keep, video)?;
             let after = cut.output_duration();
-            let (first, last) = (cut.kept[0], cut.kept[cut.kept.len() - 1]);
-            let removed = cut.kept.len() - 1 + usize::from(first.start > 0.0) + usize::from(last.end < duration - 0.05);
+            let kept = cut.kept();
+            let (first, last) = (kept[0], kept[kept.len() - 1]);
+            let removed = kept.len() - 1 + usize::from(first.start > 0.0) + usize::from(last.end < duration - 0.05);
             println!(
                 "cutting  {removed} pauses: {} -> {} (-{}, {:.0}%)",
                 display::duration(duration),
@@ -200,8 +203,56 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
             let job = ops::gif(&input, &output, opts)?;
             finish(&input, &output, || run_job(ctx, "gif", job))
         }
+        Command::Join { inputs, output, aspect, fit, short_edge, music, music_volume, no_duck, encode } => {
+            let clips = inputs.iter().map(Clip::new).collect();
+            let frame = aspect.map(|aspect| Frame { aspect, fit: fit_of(fit, 0.5), short_edge });
+            let music = music.map(|source| Music { source, volume: music_volume, duck: !no_duck, ..Music::default() });
+            render_project(ctx, &Project { clips, frame, music }, &output, &encode)
+        }
+        Command::Render { project, output, encode } => {
+            let text = std::fs::read_to_string(&project)?;
+            let project: Project = serde_json::from_str(&text).map_err(|e| anyhow!("{}: {e}", project.display()))?;
+            render_project(ctx, &project, &output, &encode)
+        }
         _ => unreachable!("not a processing command"),
     }
+}
+
+/// Render `project`, with its titles drawn on top.
+fn render_project(ctx: &Ctx, project: &Project, output: &Path, encode: &EncodeArgs) -> Result<()> {
+    check_output(output, ctx)?;
+    let first = ffmpeg::probe(&project.clips.first().ok_or_else(|| anyhow!("the project has no clips"))?.source)?;
+    let size = match (project.frame, first.video()) {
+        (Some(f), _) => Some(f.aspect.frame(f.short_edge)),
+        (None, Some(v)) => v.width.zip(v.height),
+        (None, None) => None,
+    };
+    let video = match size {
+        Some((_, h)) => Some(resolve_encoder(encode, Some(h))?),
+        None => None,
+    };
+    let durations = project
+        .clips
+        .iter()
+        .map(|c| probe_duration(&c.source))
+        .collect::<Result<Vec<_>>>()?;
+    let titles = match (size, project.clips.iter().any(|c| !c.titles.is_empty())) {
+        (Some((w, h)), true) => {
+            let ass = mx_core::project::titles_ass(&project.clips, &project.layout(&durations), w, h);
+            Some(TempFile::with_contents("titles", "ass", &ass)?)
+        }
+        _ => None,
+    };
+    let subtitles: Vec<_> = titles.iter().map(|t| t.path().to_path_buf()).collect();
+    let render = ops::render_project(project, &subtitles, output, video)?;
+    println!(
+        "joining  {} clips -> {}{}",
+        project.clips.len(),
+        display::duration(render.output_duration()),
+        size.map(|(w, h)| format!(", {w}x{h}")).unwrap_or_default()
+    );
+    let input = &project.clips[0].source;
+    finish(input, output, || run_job(ctx, "render", render.job.clone()))
 }
 
 fn fit_of(fit: FitArg, position: f64) -> Fit {

@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { errorText, exportEdit, exportGif, isCancelled, newTaskId, type Exported } from "../api";
 import { FileActions, TaskProgress } from "../components";
-import { bytes, clock, dirName, join, span, stem, store } from "../util";
-import { outputExt, request, savedFormat, type Format } from "./exporting";
+import { baseName, bytes, clock, dirName, join, span, stem, store } from "../util";
+import { outputExt, projectRequest, savedFormat, type Format } from "./exporting";
 import { outputSize, type EditorApi } from "./state";
 
 const SIZES = [10, 25, 50, 100];
 
-export default function ExportPanel({ ed, onEdit }: { ed: EditorApi; onEdit: (path: string) => void }) {
+export default function ExportPanel({ ed }: { ed: EditorApi }) {
   const [format, setFormat] = useState<Format>(savedFormat);
   const [task, setTask] = useState<string | null>(null);
   const [result, setResult] = useState<Exported | null>(null);
@@ -32,15 +32,16 @@ export default function ExportPanel({ ed, onEdit }: { ed: EditorApi; onEdit: (pa
     }
   };
 
+  const project = ed.project;
+  const first = project.clips[0]?.media ?? ed.media;
   const exportVideo = async () => {
-    const ext = outputExt(ed);
+    const ext = outputExt(project.clips);
     const output = await save({
-      defaultPath: join(dirName(ed.media.path), `${stem(ed.media.path)}_edit.${ext}`),
+      defaultPath: join(dirName(first.path), `${stem(first.path)}_edit.${ext}`),
       filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
     });
     if (!output) return;
-    const cut = ed.plan.cuts.length > 0;
-    run((id) => exportEdit(id, request(ed, output, cut ? ed.plan.keep : [], format)));
+    run((id) => exportEdit(id, projectRequest(project, output, format)));
   };
 
   const exportSelectionGif = async () => {
@@ -54,39 +55,53 @@ export default function ExportPanel({ ed, onEdit }: { ed: EditorApi; onEdit: (pa
     run((id) => exportGif(id, { input: ed.media.path, output, start: sel.start, end: sel.end, fps: gifFps, width: gifWidth }));
   };
 
-  const [w, h] = outputSize(ed);
-  const captions = ed.captionsOn && !!ed.transcript;
-  const pieces = ed.plan.cuts.length;
+  const [w, h] = outputSize(project.frame, first);
+  const hasVideo = project.clips.some((c) => c.media.hasVideo);
+  const length = project.clips.reduce((sum, c) => sum + c.outputDuration, 0);
+  const original = project.clips.reduce((sum, c) => sum + c.media.duration, 0);
+  const captioned = project.captionsOn && project.clips.some((c) => c.transcript);
+  const titles = project.clips.reduce((n, c) => n + c.titles.length, 0);
 
   return (
     <div className="panel">
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="stat-row">
           <span className="muted">Length</span>
-          <strong>{clock(ed.plan.outputDuration)}</strong>
+          <strong>{clock(length)}</strong>
         </div>
         <div className="stat-row">
-          <span className="muted">Cuts</span>
-          <span>{pieces ? `${pieces} (−${span(ed.media.duration - ed.plan.outputDuration)})` : "none"}</span>
+          <span className="muted">Clips</span>
+          <span>
+            {project.clips.length}
+            {original - length > 0.05 ? ` (−${span(original - length)} cut)` : ""}
+          </span>
         </div>
-        {ed.media.hasVideo && (
+        {hasVideo && (
           <div className="stat-row">
             <span className="muted">Frame</span>
             <span>
               {w}×{h}
-              {ed.frame ? ` (${ed.frame.aspect.w}:${ed.frame.aspect.h}, ${ed.frame.fit.kind === "pad" ? "bars" : ed.frame.fit.kind})` : ""}
+              {project.frame ? ` (${project.frame.aspect.w}:${project.frame.aspect.h}, ${project.frame.fit.kind === "pad" ? "bars" : project.frame.fit.kind})` : ""}
             </span>
           </div>
         )}
-        {ed.media.hasVideo && (
+        {hasVideo && (
           <div className="stat-row">
-            <span className="muted">Captions</span>
-            <span>{captions ? "burned in" : "none"}</span>
+            <span className="muted">Captions · titles</span>
+            <span>
+              {captioned ? "burned in" : "none"} · {titles}
+            </span>
           </div>
         )}
+        <div className="stat-row">
+          <span className="muted">Music</span>
+          <span className="ellipsis" style={{ maxWidth: 170 }}>
+            {project.music ? baseName(project.music.source) : "none"}
+          </span>
+        </div>
       </div>
 
-      {ed.media.hasVideo && (
+      {hasVideo && (
         <>
           <div className="field">
             <div className="label">Video format</div>
@@ -159,11 +174,6 @@ export default function ExportPanel({ ed, onEdit }: { ed: EditorApi; onEdit: (pa
           </div>
           <div className="row">
             <FileActions path={result.output} />
-            {!result.output.endsWith(".gif") && (
-              <button className="btn small ghost" onClick={() => onEdit(result.output)}>
-                Open in editor
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -171,7 +181,7 @@ export default function ExportPanel({ ed, onEdit }: { ed: EditorApi; onEdit: (pa
       {ed.media.hasVideo && (
         <>
           <h3 className="section">GIF</h3>
-          <p className="help">From the selection on the timeline{ed.selection ? ` (${span(ed.selection.end - ed.selection.start)})` : ""}.</p>
+          <p className="help">From the selection on this clip's timeline{ed.selection ? ` (${span(ed.selection.end - ed.selection.start)})` : ""}.</p>
           <div className="row" style={{ marginBottom: 10 }}>
             <select className="input grow" value={gifWidth} onChange={(e) => setGifWidth(Number(e.target.value))}>
               {[320, 480, 640, 800].map((px) => (

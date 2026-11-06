@@ -76,6 +76,9 @@ pub fn preview(input: &Path, source: &Probe, output: &Path) -> Result<(PreviewKi
     Ok((PreviewKind::Proxy, Some(finish(job, output))))
 }
 
+/// Files longer than this (seconds) are thumbnailed from keyframes only.
+const KEYFRAMES_ONLY_AFTER: f64 = 60.0;
+
 /// A row of evenly spaced thumbnails in one image.
 #[derive(Debug, Clone, Serialize)]
 pub struct Filmstrip {
@@ -86,8 +89,10 @@ pub struct Filmstrip {
 }
 
 /// Render `count` thumbnails `height` pixels tall across `input` into one
-/// JPEG, side by side. Only keyframes are decoded, which is many times
-/// faster than decoding every frame and plenty for a timeline overview.
+/// JPEG, side by side. On long files only keyframes are decoded, which is
+/// many times faster than decoding every frame and plenty for a timeline
+/// overview. Short files are decoded whole: a clip with one keyframe
+/// would otherwise give one thumbnail and a black strip.
 pub fn filmstrip(input: &Path, source: &Probe, output: &Path, count: u32, height: u32) -> Result<(Filmstrip, Job)> {
     let Some(v) = source.video() else {
         bail!("{} has no video", input.display());
@@ -97,8 +102,11 @@ pub fn filmstrip(input: &Path, source: &Probe, output: &Path, count: u32, height
     };
     let (w, h) = (v.width.unwrap_or(16), v.height.unwrap_or(9));
     let thumb_width = ((height as f64 * w as f64 / h.max(1) as f64 / 2.0).round() as u32).max(1) * 2;
-    let job = Job::new(output)
-        .args(["-skip_frame", "nokey"])
+    let mut job = Job::new(output);
+    if duration > KEYFRAMES_ONLY_AFTER {
+        job = job.args(["-skip_frame", "nokey"]);
+    }
+    let job = job
         .input(input)
         .args(["-an", "-sn"])
         .args([
@@ -162,5 +170,7 @@ mod tests {
         assert_eq!((strip.thumb_width, strip.thumb_height), (128, 72));
         let s = super::super::args_of(&job);
         assert!(s.contains("fps=40/60.000,scale=128:72") && s.contains("tile=40x1"), "{s}");
+        // A minute is short enough to decode every frame.
+        assert!(!s.contains("skip_frame"), "{s}");
     }
 }

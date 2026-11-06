@@ -17,15 +17,15 @@ export default function FramePanel({ ed }: { ed: EditorApi }) {
     );
   }
   const source = Math.min(ed.media.width ?? 1080, ed.media.height ?? 1080);
-  const f = ed.frame;
+  const f = ed.project.frame;
   const set = (next: Partial<Frame>) =>
-    ed.setFrame({ aspect: { w: 9, h: 16 }, fit: { kind: "blur" }, short_edge: Math.min(source, 1080), ...f, ...next });
+    ed.project.setFrame({ aspect: { w: 9, h: 16 }, fit: { kind: "blur" }, short_edge: Math.min(source, 1080), ...f, ...next });
   const fits: [Fit["kind"], string, string][] = [
     ["blur", "Blur", "the whole picture over a blurred copy"],
     ["crop", "Crop", "fill the frame, cut off the sides"],
     ["pad", "Bars", "the whole picture with black bars"],
   ];
-  const [w, h] = outputSize(ed);
+  const [w, h] = outputSize(ed.project.frame, ed.project.clips[0]?.media ?? ed.media);
   const landscapeSource = (ed.media.width ?? 16) >= (ed.media.height ?? 9);
 
   return (
@@ -34,7 +34,7 @@ export default function FramePanel({ ed }: { ed: EditorApi }) {
       <div className="field">
         <div className="label">Shape</div>
         <div className="chips">
-          <button className={`chip${!f ? " on" : ""}`} onClick={() => ed.setFrame(null)}>
+          <button className={`chip${!f ? " on" : ""}`} onClick={() => ed.project.setFrame(null)}>
             Original
           </button>
           {ASPECTS.map(([label, aw, ah, hint]) => (

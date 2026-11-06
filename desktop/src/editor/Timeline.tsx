@@ -4,7 +4,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { Filmstrip, Highlight, Range } from "../api";
+import type { Filmstrip, Highlight, Range, Title } from "../api";
 import { clock } from "../util";
 
 type Props = {
@@ -16,9 +16,11 @@ type Props = {
   cuts: Range[];
   selection: Range | null;
   highlights: Highlight[];
+  titles: Title[];
   zoom: number;
   onSeek: (t: number) => void;
   onSelect: (r: Range | null) => void;
+  onPickTitle: (i: number) => void;
 };
 
 const STRIP_HEIGHT = 48;
@@ -129,7 +131,7 @@ export default function Timeline(p: Props) {
         <div className="ruler">
           {ticks.map((t) => (
             <span key={t} style={{ left: x(t) - 3 }}>
-              {clock(t)}
+              {clock(t, tickStep < 1)}
             </span>
           ))}
         </div>
@@ -167,6 +169,21 @@ export default function Timeline(p: Props) {
               }}
             >
               #{i + 1}
+            </div>
+          ))}
+          {p.titles.map((t, i) => (
+            <div
+              key={`t${i}`}
+              className="mark-title"
+              title={t.text}
+              style={{ left: x(t.start), width: Math.max(6, x(t.end - t.start)) }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                p.onPickTitle(i);
+                p.onSeek(t.start);
+              }}
+            >
+              {t.text}
             </div>
           ))}
         </div>

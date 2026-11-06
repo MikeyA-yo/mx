@@ -56,20 +56,22 @@ pub(super) fn select_expr(ranges: &[Range], shift: f64) -> String {
         .join("+")
 }
 
-/// `asplit` into one branch per range, `atrim` each, `concat` them back.
-/// Ranges are in time order, so each branch is consumed as the audio is
-/// decoded and nothing piles up in memory.
-pub(super) fn audio_chain(ranges: &[Range]) -> String {
+/// `asplit` the `input` pad into one branch per range, `atrim` each, and
+/// `concat` them back into the `out` pad. `tag` keeps the intermediate
+/// pads of several chains in one graph apart. Ranges are in time order,
+/// so each branch is consumed as the audio is decoded and nothing piles
+/// up in memory.
+pub(super) fn audio_chain(input: &str, tag: &str, ranges: &[Range], out: &str) -> String {
     let n = ranges.len();
-    let labels: String = (0..n).map(|i| format!("[as{i}]")).collect();
-    let mut chain = format!("[0:a:0]asplit={n}{labels};
+    let labels: String = (0..n).map(|i| format!("[{tag}s{i}]")).collect();
+    let mut chain = format!("[{input}]asplit={n}{labels};
 ");
     for (i, r) in ranges.iter().enumerate() {
-        chain += &format!("[as{i}]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS[at{i}];
+        chain += &format!("[{tag}s{i}]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS[{tag}t{i}];
 ", r.start, r.end);
     }
-    let trimmed: String = (0..n).map(|i| format!("[at{i}]")).collect();
-    chain + &format!("{trimmed}concat=n={n}:v=0:a=1[a]")
+    let trimmed: String = (0..n).map(|i| format!("[{tag}t{i}]")).collect();
+    chain + &format!("{trimmed}concat=n={n}:v=0:a=1[{out}]")
 }
 
 /// Keep only `keep` from `input`. Works for video and for audio-only files

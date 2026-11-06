@@ -106,7 +106,7 @@ pub async fn filmstrip(app: AppHandle, task_id: String, path: String) -> Result<
         if source.video().is_none() {
             return Ok(None);
         }
-        let out = cache::path("filmstrip", 1, &input, "jpg")?;
+        let out = cache::path("filmstrip", 2, &input, "jpg")?;
         let (strip, job) = ops::filmstrip(&input, &source, &out, STRIP_COUNT, STRIP_HEIGHT)?;
         if !out.is_file() {
             std::fs::create_dir_all(cache::dir())?;

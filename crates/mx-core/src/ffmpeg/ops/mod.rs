@@ -24,7 +24,7 @@ pub use jumpcut::jumpcut;
 pub use preview::{Filmstrip, PreviewKind, filmstrip, preview};
 pub use reframe::{Aspect, Fit, reframe};
 pub use remux::{Remux, SubtitlePlan, remux, remux_with};
-pub use render::{Edit, Render, render};
+pub use render::{Edit, Render, render, render_project};
 pub use speed::speed;
 pub use trim::{Cut, Trim, trim};
 

@@ -48,9 +48,9 @@ pub async fn doctor() -> Result<Vec<Check>, String> {
     .await
 }
 
-/// A file given on the command line ("Open with" in Explorer), to open
-/// in the editor at startup.
+/// Files given on the command line ("Open with" in Explorer), to open
+/// in the editor at startup, in order.
 #[tauri::command]
-pub fn startup_file() -> Option<String> {
-    std::env::args().skip(1).find(|a| !a.starts_with('-') && std::path::Path::new(a).is_file())
+pub fn startup_files() -> Vec<String> {
+    std::env::args().skip(1).filter(|a| !a.starts_with('-') && std::path::Path::new(a).is_file()).collect()
 }

@@ -4,7 +4,7 @@
 // and timing; the export is exact.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { CaptionStyle, Frame, MediaSummary, Segment } from "../api";
+import type { CaptionStyle, Frame, MediaSummary, Segment, Title } from "../api";
 import { MusicIcon } from "../icons";
 
 type Props = {
@@ -17,6 +17,10 @@ type Props = {
   time: number;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   onLoaded: () => void;
+  titles: Title[];
+  selectedTitle: number | null;
+  onSelectTitle: (i: number | null) => void;
+  onMoveTitle: (i: number, x: number, y: number) => void;
 };
 
 /** The cue showing at `t`, by binary search (cues are in time order). */
@@ -109,6 +113,50 @@ export default function Stage(p: Props) {
             <span>Audio only</span>
           </div>
         )}
+        {p.titles.map((t, i) => {
+          const showing = p.time >= t.start && p.time < t.end;
+          const selected = p.selectedTitle === i;
+          if (!showing && !selected) return null;
+          const size = t.size * Math.min(boxW, boxH);
+          return (
+            <div
+              key={i}
+              className={`title-preview${selected ? " selected" : ""}`}
+              style={{
+                left: t.x * boxW,
+                top: t.y * boxH,
+                fontSize: size,
+                fontFamily: `"${t.font}", sans-serif`,
+                color: t.color,
+                opacity: showing ? 1 : 0.45,
+                background: t.boxed ? "rgba(0,0,0,0.69)" : undefined,
+                padding: t.boxed ? `${size * 0.12}px ${size * 0.3}px` : undefined,
+                WebkitTextStroke: t.boxed ? undefined : `${size * 0.14}px black`,
+              }}
+              onPointerDown={(e) => {
+                // Drag to place: the title's centre follows the pointer.
+                e.preventDefault();
+                e.stopPropagation();
+                p.onSelectTitle(i);
+                const box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                const move = (ev: PointerEvent) =>
+                  p.onMoveTitle(
+                    i,
+                    Math.min(1, Math.max(0, (ev.clientX - box.left) / box.width)),
+                    Math.min(1, Math.max(0, (ev.clientY - box.top) / box.height)),
+                  );
+                const up = () => {
+                  window.removeEventListener("pointermove", move);
+                  window.removeEventListener("pointerup", up);
+                };
+                window.addEventListener("pointermove", move);
+                window.addEventListener("pointerup", up);
+              }}
+            >
+              {t.text}
+            </div>
+          );
+        })}
         {text && (
           <div
             key={cue}

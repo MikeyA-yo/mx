@@ -93,7 +93,7 @@ export default function TextPanel({ ed }: { ed: EditorApi }) {
   }, [now]);
 
   const toggle = (i: number) => ed.setRemoved(ed.removed.includes(i) ? ed.removed.filter((j) => j !== i) : [...ed.removed, i]);
-  const style = ed.style;
+  const style = ed.project.style;
 
   return (
     <div className="panel">
@@ -143,17 +143,17 @@ export default function TextPanel({ ed }: { ed: EditorApi }) {
       {ed.transcript && style && (
         <>
           <label className="toggle" style={{ marginBottom: 12 }}>
-            <input type="checkbox" checked={ed.captionsOn} onChange={(e) => ed.setCaptionsOn(e.target.checked)} />
+            <input type="checkbox" checked={ed.project.captionsOn} onChange={(e) => ed.project.setCaptionsOn(e.target.checked)} />
             <strong>Burn captions into the video</strong>
           </label>
-          {ed.captionsOn && (
+          {ed.project.captionsOn && (
             <div className="card" style={{ marginBottom: 16, padding: 12 }}>
               <div className="field">
                 <label>
                   <span>Words at a time</span>
                   <span>{style.max_words}</span>
                 </label>
-                <input type="range" min={1} max={8} value={style.max_words} onChange={(e) => ed.setStyle({ ...style, max_words: Number(e.target.value) })} />
+                <input type="range" min={1} max={8} value={style.max_words} onChange={(e) => ed.project.setStyle({ ...style, max_words: Number(e.target.value) })} />
               </div>
               <div className="field">
                 <label>
@@ -166,7 +166,7 @@ export default function TextPanel({ ed }: { ed: EditorApi }) {
                   max={0.14}
                   step={0.005}
                   value={style.size}
-                  onChange={(e) => ed.setStyle({ ...style, size: Number(e.target.value) })}
+                  onChange={(e) => ed.project.setStyle({ ...style, size: Number(e.target.value) })}
                 />
               </div>
               <div className="field">
@@ -180,11 +180,11 @@ export default function TextPanel({ ed }: { ed: EditorApi }) {
                   max={0.97}
                   step={0.01}
                   value={style.position}
-                  onChange={(e) => ed.setStyle({ ...style, position: Number(e.target.value) })}
+                  onChange={(e) => ed.project.setStyle({ ...style, position: Number(e.target.value) })}
                 />
               </div>
               <div className="row" style={{ marginBottom: 10 }}>
-                <select className="input grow" value={style.font} onChange={(e) => ed.setStyle({ ...style, font: e.target.value })}>
+                <select className="input grow" value={style.font} onChange={(e) => ed.project.setStyle({ ...style, font: e.target.value })}>
                   {FONTS.map((f) => (
                     <option key={f} value={f}>
                       {f}
@@ -194,11 +194,11 @@ export default function TextPanel({ ed }: { ed: EditorApi }) {
               </div>
               <div className="row">
                 <label className="toggle">
-                  <input type="checkbox" checked={style.uppercase} onChange={(e) => ed.setStyle({ ...style, uppercase: e.target.checked })} />
+                  <input type="checkbox" checked={style.uppercase} onChange={(e) => ed.project.setStyle({ ...style, uppercase: e.target.checked })} />
                   <span>CAPITALS</span>
                 </label>
                 <label className="toggle" style={{ marginLeft: 14 }}>
-                  <input type="checkbox" checked={style.pop} onChange={(e) => ed.setStyle({ ...style, pop: e.target.checked })} />
+                  <input type="checkbox" checked={style.pop} onChange={(e) => ed.project.setStyle({ ...style, pop: e.target.checked })} />
                   <span>Pop in</span>
                 </label>
               </div>
@@ -217,7 +217,7 @@ export default function TextPanel({ ed }: { ed: EditorApi }) {
               onClick={() => {
                 ed.setTranscript(null);
                 ed.setRemoved([]);
-                ed.setCaptionsOn(false);
+                ed.project.setCaptionsOn(false);
               }}
             >
               Redo

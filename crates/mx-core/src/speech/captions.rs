@@ -82,14 +82,14 @@ pub fn cues(transcript: &Transcript, style: &CaptionStyle) -> Vec<Segment> {
 }
 
 /// `h:mm:ss.cc`, ASS's centisecond timestamps.
-fn ass_time(secs: f64) -> String {
+pub(crate) fn ass_time(secs: f64) -> String {
     let cs = (secs.max(0.0) * 100.0).round() as u64;
     format!("{}:{:02}:{:02}.{:02}", cs / 360_000, cs / 6000 % 60, cs / 100 % 60, cs % 100)
 }
 
 /// ASS treats `{...}` as override tags and `\` as an escape; neither may
 /// reach libass from transcribed text.
-fn ass_text(s: &str, uppercase: bool) -> String {
+pub(crate) fn ass_text(s: &str, uppercase: bool) -> String {
     let s = s.replace('\\', "/").replace('{', "(").replace('}', ")");
     if uppercase { s.to_uppercase() } else { s }
 }

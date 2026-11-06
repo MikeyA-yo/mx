@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { startupFile } from "./api";
+import { startupFiles } from "./api";
 import { DownloadIcon, EditIcon, SetupIcon, TasksIcon } from "./icons";
 import { useTasks } from "./tasks";
 import { rememberRecent } from "./util";
@@ -13,23 +13,29 @@ type Page = "download" | "editor" | "tasks" | "setup";
 
 export default function App() {
   const [page, setPage] = useState<Page>("editor");
-  const [file, setFile] = useState<string | null>(null);
+  const [request, setRequest] = useState<{ paths: string[]; n: number } | null>(null);
   const running = useTasks().filter((t) => t.status === "running").length;
 
-  const openInEditor = (path: string) => {
-    rememberRecent(path);
-    setFile(path);
+  const openInEditor = (paths: string[]) => {
+    if (paths.length === 0) return;
+    paths.forEach(rememberRecent);
+    setRequest((r) => ({ paths, n: (r?.n ?? 0) + 1 }));
     setPage("editor");
   };
+  const openOne = (path: string) => openInEditor([path]);
 
+  // Once per launch (development mode mounts twice).
+  const started = useRef(false);
   useEffect(() => {
-    startupFile().then((f) => f && openInEditor(f));
+    if (started.current) return;
+    started.current = true;
+    startupFiles().then(openInEditor);
   }, []);
 
-  // Dropping a file anywhere on the window opens it.
+  // Dropping files anywhere on the window adds them as clips.
   useEffect(() => {
     const off = getCurrentWebview().onDragDropEvent((e) => {
-      if (e.payload.type === "drop" && e.payload.paths.length > 0) openInEditor(e.payload.paths[0]);
+      if (e.payload.type === "drop") openInEditor(e.payload.paths);
     });
     return () => {
       off.then((f) => f());
@@ -62,10 +68,10 @@ export default function App() {
       <main>
         {/* The editor stays mounted so switching pages keeps its work. */}
         <div style={{ display: page === "editor" ? "contents" : "none" }}>
-          <EditorPage file={file} onOpen={openInEditor} onClose={() => setFile(null)} />
+          <EditorPage request={request} onOpen={openInEditor} />
         </div>
-        {page === "download" && <DownloadPage onEdit={openInEditor} />}
-        {page === "tasks" && <TasksPage onEdit={openInEditor} />}
+        {page === "download" && <DownloadPage onEdit={openOne} />}
+        {page === "tasks" && <TasksPage onEdit={openOne} />}
         {page === "setup" && <SetupPage />}
       </main>
     </div>

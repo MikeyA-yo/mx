@@ -141,12 +141,36 @@ export type DownloadOptions = {
 };
 export const download = (taskId: string, opts: DownloadOptions) => invoke<string[]>("download", { taskId, opts });
 
-export type ExportRequest = {
-  input: string;
-  output: string;
+/** Text on the picture, timed on its clip's source. */
+export type Title = {
+  text: string;
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  size: number;
+  color: string;
+  font: string;
+  boxed: boolean;
+};
+
+export type Music = { source: string; offset: number; volume: number; duck: boolean; fade_out: number };
+
+export type ClipRequest = {
+  source: string;
   keep: Range[];
+  volume: number;
+  titles: Title[];
+  /** Source-timed, without the lines deleted in the editor. */
+  transcript: Transcript | null;
+};
+
+export type ExportRequest = {
+  clips: ClipRequest[];
   frame: Frame | null;
-  captions: { transcript: Transcript; style: CaptionStyle } | null;
+  music: Music | null;
+  captions: CaptionStyle | null;
+  output: string;
   codec: "h264" | "hevc" | "av1";
   quality: number | null;
   gpu: boolean;
@@ -159,7 +183,7 @@ export const exportGif = (taskId: string, req: GifRequest) => invoke<Exported>("
 
 export const listEncoders = () => invoke<EncoderInfo[]>("list_encoders");
 export const doctor = () => invoke<Check[]>("doctor");
-export const startupFile = () => invoke<string | null>("startup_file");
+export const startupFiles = () => invoke<string[]>("startup_files");
 
 /** Errors from commands arrive as strings; anything else is a bug. */
 export const errorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : String(e));

@@ -11,6 +11,7 @@ pub mod cancel;
 pub mod error;
 pub mod ffmpeg;
 pub mod platform;
+pub mod project;
 pub mod speech;
 pub mod temp;
 pub mod timeline;

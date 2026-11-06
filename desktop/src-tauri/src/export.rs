@@ -1,15 +1,15 @@
-//! Rendering: the edit as one file, size-targeted copies and GIFs.
+//! Rendering: the project as one file, size-targeted copies and GIFs.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use anyhow::{Result, anyhow, bail};
 use mx_core::ffmpeg::encoders::{self, Codec, Encoder};
-use mx_core::ffmpeg::ops::{self, CompressCodec, Edit, Frame, GifOptions, VideoEncode};
+use mx_core::ffmpeg::ops::{self, CompressCodec, Frame, GifOptions, VideoEncode};
 use mx_core::ffmpeg::probe;
 use mx_core::speech::{self, CaptionStyle, Transcript};
 use mx_core::temp::TempFile;
-use mx_core::timeline::Range;
+use mx_core::project::{Clip, Music, Project, output_transcript, titles_ass};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
@@ -34,23 +34,25 @@ fn choose(codec: &str, gpu: bool, height: Option<u32>, quality: Option<u32>) -> 
     Ok(VideoEncode { encoder, quality })
 }
 
+/// One clip of the project, as the editor sends it.
 #[derive(Debug, Deserialize)]
-pub struct Captions {
-    /// Timed on the source; retimed to the output here.
-    transcript: Transcript,
-    style: CaptionStyle,
+pub struct ClipRequest {
+    #[serde(flatten)]
+    clip: Clip,
+    /// The clip's transcript, source-timed, without deleted lines.
+    #[serde(default)]
+    transcript: Option<Transcript>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportRequest {
-    input: String,
-    output: String,
-    /// Source ranges to keep; empty keeps everything.
-    #[serde(default)]
-    keep: Vec<Range>,
+    clips: Vec<ClipRequest>,
     frame: Option<Frame>,
-    captions: Option<Captions>,
+    music: Option<Music>,
+    /// Burn the clips' transcripts in with this style.
+    captions: Option<CaptionStyle>,
+    output: String,
     codec: String,
     quality: Option<u32>,
     gpu: bool,
@@ -72,31 +74,45 @@ pub async fn export(app: AppHandle, task_id: String, req: ExportRequest) -> Resu
     let output = PathBuf::from(&req.output);
     let title = format!("Exporting {}", file_name(&output));
     tasks::run(app, task_id, "export", title, move |task| {
-        let input = PathBuf::from(&req.input);
         task.progress("preparing", None, None);
-        let source = probe(&input)?;
-        let frame_size = match (req.frame, source.video()) {
+        let (clips, transcripts): (Vec<Clip>, Vec<Option<Transcript>>) =
+            req.clips.into_iter().map(|c| (c.clip, c.transcript)).unzip();
+        let project = Project { clips, frame: req.frame, music: req.music };
+        let Some(first) = project.clips.first() else { bail!("there are no clips to export") };
+        let first = probe(&first.source)?;
+        let frame_size = match (project.frame, first.video()) {
             (Some(f), _) => Some(f.aspect.frame(f.short_edge)),
             (None, Some(v)) => v.width.zip(v.height),
             (None, None) => None,
         };
-        let video = match source.video() {
-            Some(_) => Some(choose(&req.codec, req.gpu, frame_size.map(|(_, h)| h), req.quality)?),
+        let video = match frame_size {
+            Some((_, h)) => Some(choose(&req.codec, req.gpu, Some(h), req.quality)?),
             None => None,
         };
 
-        let mut subtitles = None;
-        if let Some(c) = &req.captions {
-            let Some((w, h)) = frame_size else { bail!("captions need video") };
-            let timed = if req.keep.is_empty() { c.transcript.clone() } else { c.transcript.retimed(&req.keep) };
-            let cues = speech::cues(&timed, &c.style);
-            subtitles = Some(TempFile::with_contents("captions", "ass", &speech::to_ass(&cues, w, h, &c.style))?);
+        // Captions and titles are drawn on the output, so they're laid out
+        // through the same clip placement the render uses.
+        let durations = project
+            .clips
+            .iter()
+            .map(|c| probe(&c.source)?.duration_secs().ok_or_else(|| anyhow!("couldn't read the duration of {}", c.source.display())))
+            .collect::<Result<Vec<_>>>()?;
+        let layout = project.layout(&durations);
+        let mut overlays = Vec::new();
+        if let (Some(style), Some((w, h))) = (&req.captions, frame_size) {
+            let timed = output_transcript(&layout, &transcripts);
+            if !timed.segments.is_empty() {
+                let cues = speech::cues(&timed, style);
+                overlays.push(TempFile::with_contents("captions", "ass", &speech::to_ass(&cues, w, h, style))?);
+            }
         }
-        let edit = Edit {
-            keep: req.keep.clone(),
-            frame: req.frame,
-            subtitles: subtitles.as_ref().map(|s| s.path().to_path_buf()),
-        };
+        if let Some((w, h)) = frame_size
+            && project.clips.iter().any(|c| !c.titles.is_empty())
+        {
+            overlays.push(TempFile::with_contents("titles", "ass", &titles_ass(&project.clips, &layout, w, h))?);
+        }
+        let subtitles: Vec<PathBuf> = overlays.iter().map(|t| t.path().to_path_buf()).collect();
+
         // A size target needs a second encode: two-pass plans its bitrate
         // against the finished picture, so the edit is rendered first.
         let intermediate = match req.target_mb {
@@ -104,7 +120,7 @@ pub async fn export(app: AppHandle, task_id: String, req: ExportRequest) -> Resu
             None => None,
         };
         let render_to = intermediate.as_ref().map_or(output.as_path(), |t| t.path());
-        let render = ops::render(&input, render_to, &edit, video)?;
+        let render = ops::render_project(&project, &subtitles, render_to, video)?;
         let duration = render.output_duration();
         task.run_job("rendering", render.job.clone())?;
         if let (Some(mb), Some(rendered)) = (req.target_mb, &intermediate) {

@@ -1,12 +1,52 @@
 // The editor's shared state, as the panels see it.
+//
+// A project is a row of clips. Each clip has its own editor (cuts,
+// transcript, titles, all in that clip's source time); the frame, caption
+// style and music belong to the whole project.
 
-import type { CaptionStyle, EditPlan, Frame, Highlight, MediaSummary, Range, SilenceReport, Transcript } from "../api";
+import type {
+  CaptionStyle,
+  EditPlan,
+  Frame,
+  Highlight,
+  MediaSummary,
+  Music,
+  Range,
+  SilenceReport,
+  Title,
+  Transcript,
+} from "../api";
 
 export type Pauses = {
   report: SilenceReport;
   /** Settings the report was made with. */
   minSilence: number;
   thresholdDb: number | null;
+};
+
+/** What a clip contributes to the export, kept current by its editor. */
+export type ClipSpec = {
+  id: string;
+  media: MediaSummary;
+  /** Kept source ranges; the whole source when nothing is cut. */
+  keep: Range[];
+  outputDuration: number;
+  /** Without the lines deleted in the text editor. */
+  transcript: Transcript | null;
+  titles: Title[];
+};
+
+/** Settings shared by every clip. */
+export type ProjectApi = {
+  clips: ClipSpec[];
+  frame: Frame | null;
+  setFrame: (f: Frame | null) => void;
+  captionsOn: boolean;
+  setCaptionsOn: (on: boolean) => void;
+  style: CaptionStyle | null;
+  setStyle: (s: CaptionStyle) => void;
+  music: Music | null;
+  setMusic: (m: Music | null) => void;
 };
 
 export type EditorApi = {
@@ -35,30 +75,43 @@ export type EditorApi = {
   removed: number[];
   setRemoved: (r: number[]) => void;
 
+  titles: Title[];
+  setTitles: (t: Title[]) => void;
+  /** Index of the title being edited, if any. */
+  selectedTitle: number | null;
+  setSelectedTitle: (i: number | null) => void;
+
   highlights: Highlight[] | null;
   setHighlights: (h: Highlight[] | null) => void;
 
-  frame: Frame | null;
-  setFrame: (f: Frame | null) => void;
-
-  captionsOn: boolean;
-  setCaptionsOn: (on: boolean) => void;
-  style: CaptionStyle | null;
-  setStyle: (s: CaptionStyle) => void;
-
   skipCuts: boolean;
   setSkipCuts: (on: boolean) => void;
+
+  project: ProjectApi;
+  /** This clip's spec, as the export sees it. */
+  spec: ClipSpec;
 };
 
-/** Output frame size: the reframe target, else the source. */
-export function outputSize(ed: Pick<EditorApi, "media" | "frame">): [number, number] {
-  const f = ed.frame;
-  if (f) {
+/** Output frame size: the project frame, else the first clip's. */
+export function outputSize(frame: Frame | null, media: MediaSummary): [number, number] {
+  if (frame) {
     const even = (x: number) => Math.max(1, Math.round(x / 2)) * 2;
-    const short = even(f.short_edge);
-    return f.aspect.w <= f.aspect.h
-      ? [short, even((short * f.aspect.h) / f.aspect.w)]
-      : [even((short * f.aspect.w) / f.aspect.h), short];
+    const short = even(frame.short_edge);
+    return frame.aspect.w <= frame.aspect.h
+      ? [short, even((short * frame.aspect.h) / frame.aspect.w)]
+      : [even((short * frame.aspect.w) / frame.aspect.h), short];
   }
-  return [ed.media.width ?? 1920, ed.media.height ?? 1080];
+  return [media.width ?? 1920, media.height ?? 1080];
+}
+
+/** Where source time `t` plays in the clip's output (cut time snaps to
+ * the next kept moment). */
+export function toOutput(keep: Range[], t: number): number {
+  let out = 0;
+  for (const k of keep) {
+    if (t < k.start) return out;
+    if (t < k.end) return out + t - k.start;
+    out += k.end - k.start;
+  }
+  return out;
 }

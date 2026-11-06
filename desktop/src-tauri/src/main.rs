@@ -43,7 +43,7 @@ fn main() {
             export::export_gif,
             export::list_encoders,
             system::doctor,
-            system::startup_file,
+            system::startup_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running mx");

@@ -61,6 +61,9 @@ mx highlights film.mp4                                 # the 3 most eventful 30 
 mx highlights film.mp4 -n 5 -l 20 --to 7:15            # search only before the credits
 mx highlights film.mp4 --export clips --vertical       # render them as 9:16 Shorts
 mx gif in.mp4 loop.gif --from 5 --to 9 --fps 15 --width 480
+mx join intro.mp4 talk.mp4 outro.mp4 -o video.mp4      # one video, clips fitted into the first one's frame
+mx join a.mp4 b.mp4 -o short.mp4 -a 9:16 --music song.mp3 --music-volume 0.2
+mx render project.json out.mp4                         # clips, cuts, titles and music from a project file
 
 mx transcribe talk.mp4                                 # -> talk.srt (also .vtt, .txt, .json with -o)
 mx transcribe talk.mp4 -l en -m small.en               # English-only model, more accurate
@@ -173,19 +176,32 @@ extension such as "Get cookies.txt LOCALLY" and pass `--cookies`.
 `desktop/` is a Tauri app on the same engine: download from a link, then
 edit on a timeline and export once.
 
+A project is a row of clips. Add files with **+ Add clip** (or drop
+several on the window), reorder them in the clip bar, and pick one to
+edit it. Each clip keeps its own cuts, transcript and titles in its own
+time, so reordering or recutting never strands a title; the frame,
+caption style and music belong to the whole project. Playback runs on
+from one clip into the next, with the music in step.
+
 - **Cut**: find pauses and jump-cut them (sliders for the shortest pause,
   the breathing room kept and the threshold), or drag on the timeline and
   press <kbd>X</kbd>.
 - **Text**: transcribe, then edit the video by deleting lines from the
   transcript. Burn the rest in as styled captions; the preview shows them
   where and how they'll be drawn.
-- **Highlights**: the liveliest stretches, marked on the timeline, exported
-  as clips.
+- **Titles**: text on the picture (colour, font, size, an optional box),
+  dragged into place on the preview, from the playhead for as long as you
+  set.
+- **Picks**: the liveliest stretches (highlights), marked on the
+  timeline, exported as clips.
 - **Frame**: 9:16, 1:1, 4:5 or 16:9 with a blurred background, a crop
   (with position) or bars, previewed live.
-- **Export**: every cut, the frame and the captions in **one encode**
-  (`ops::render`), optionally two-passed under a file size. GIFs from the
-  selection.
+- **Music**: a soundtrack under everything that loops if it's short,
+  starts where you choose in the song, fades out, and ducks under the
+  clips' own sound (`sidechaincompress` keyed on it).
+- **Export**: every clip, cut, the frame, captions, titles and music in
+  **one encode** (`ops::render_project`), optionally two-passed under a
+  file size. GIFs from the selection.
 
 Keys: <kbd>Space</kbd> play, <kbd>←</kbd>/<kbd>→</kbd> 1 s (<kbd>Shift</kbd> 5 s),
 <kbd>,</kbd>/<kbd>.</kbd> one frame, <kbd>I</kbd>/<kbd>O</kbd> selection start/end,
@@ -228,7 +244,8 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 | `crates/mx-core/src/process.rs` | shared subprocess streaming, cancellable |
 | `crates/mx-core/src/{platform,error}.rs` | site detection; yt-dlp errors → fixes |
 | `crates/mx-core/src/units.rs` | parsing times (1:30) and sizes (10MB) |
-| `crates/mx-core/src/ffmpeg/ops/render.rs` | one-pass render of an edit: kept ranges, frame, burned-in subtitles |
+| `crates/mx-core/src/project.rs` | projects: clips in order, music, titles; laying clips out on the output timeline |
+| `crates/mx-core/src/ffmpeg/ops/render.rs` | one-pass render of a project or a single edit: cuts, fitting clips into one frame, joining, subtitles, music |
 | `crates/mx-core/src/cache.rs` | per-file results kept between runs (measurements, previews, transcripts) |
 | `crates/mx-cli/` | the `mx` binary: arguments (`cli.rs`), processing commands (`edit.rs`), output |
 | `desktop/src-tauri/` | the desktop app's Rust side: commands over mx-core, and a task registry for progress and cancel |
@@ -239,6 +256,6 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 1. **Adaptive streaming**: encode a 1080/720/480/240 ladder with aligned keyframes, package as HLS/DASH.
 2. **Auto-highlights**: done for activity (loudness, motion, cuts); next, transcript-aware picks.
 3. **Subtitles**: done (Whisper → SRT/VTT, styled burn-in, editing by transcript); next, word-level timing.
-4. **Desktop editor**: first version done; next, multiple clips on one timeline, music and text overlays.
+4. **Desktop editor**: clips, titles and music done; next, word-level caption timing, transitions, saving projects.
 5. **Live recorder**: watch a channel, record when it goes live, handle stream drops.
 6. **Enhancement**: Real-ESRGAN upscaling, RIFE interpolation, Demucs stem separation.

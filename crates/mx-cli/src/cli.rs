@@ -269,6 +269,41 @@ pub enum Command {
         #[arg(long, default_value_t = 480)]
         width: u32,
     },
+    /// Join clips into one video, fitted into one frame, with optional music
+    Join {
+        /// Clips, in playing order
+        #[arg(required = true, num_args = 2..)]
+        inputs: Vec<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Frame shape [default: the first clip's]
+        #[arg(short, long)]
+        aspect: Option<Aspect>,
+        /// How clips that don't match fill the frame
+        #[arg(long, value_enum, default_value_t = FitArg::Blur)]
+        fit: FitArg,
+        /// Shorter side of the frame in pixels, with --aspect
+        #[arg(long, default_value_t = 1080)]
+        short_edge: u32,
+        /// Soundtrack under the whole video (loops if it's shorter)
+        #[arg(long)]
+        music: Option<PathBuf>,
+        /// Music volume, 0 to 1
+        #[arg(long, default_value_t = 0.25)]
+        music_volume: f64,
+        /// Keep the music level while clips have sound (no ducking)
+        #[arg(long)]
+        no_duck: bool,
+        #[command(flatten)]
+        encode: EncodeArgs,
+    },
+    /// Render a project file (clips, cuts, titles, music) as saved by the desktop editor
+    Render {
+        project: PathBuf,
+        output: PathBuf,
+        #[command(flatten)]
+        encode: EncodeArgs,
+    },
     /// Check that yt-dlp, ffmpeg, ffprobe and a JS runtime are available
     Doctor,
 }
