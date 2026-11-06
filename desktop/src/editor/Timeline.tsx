@@ -1,13 +1,17 @@
 // The timeline: ruler, filmstrip, waveform, lanes for the layers (text,
 // video, sound), and on top of them the cuts, the selection, highlights and
 // the playhead. Click to seek, drag to select; drag a layer to move it,
-// its edges to trim it. Everything is in source time.
+// its edges to trim it.
+//
+// It draws either one clip in its own time (cut parts shown in red) or the
+// whole video in output time, the clips end to end as blocks that can be
+// dragged to reorder and trimmed at their edges. The pictures say which.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { Filmstrip, Highlight, Range } from "../api";
+import type { Highlight, Range } from "../api";
 import { clock } from "../util";
-import { sameLayer, type LayerBar, type LayerKind, type LayerRef } from "./state";
+import { layerKey, type ClipBlock, type LayerBar, type LayerKind, type Picture } from "./state";
 
 type Edge = "move" | "start" | "end";
 
@@ -15,24 +19,31 @@ type Props = {
   duration: number;
   time: number;
   playing: boolean;
-  strip: Filmstrip | null;
-  wave: number[] | null;
+  pictures: Picture[];
+  /** Drawn red: what's cut (the clip timeline). */
   cuts: Range[];
   selection: Range | null;
   highlights: Highlight[];
   /** Zoom/pan keyframe times. */
   keyframes: number[];
   layers: LayerBar[];
-  selectedLayer: LayerRef | null;
+  selectedKey: string | null;
+  /** The clips, on the whole-video timeline. */
+  blocks?: ClipBlock[];
   zoom: number;
   onZoom: (zoom: number) => void;
+  /** Where it was scrolled is kept under this name while it's away. */
+  scrollKey: string;
   onSeek: (t: number) => void;
   onSelect: (r: Range | null) => void;
-  onPickLayer: (l: LayerRef | null) => void;
+  onPickLayer: (bar: LayerBar | null) => void;
   /** A layer dragged to new times; `edge` says which part was held. */
-  onMoveLayer: (l: LayerRef, start: number, end: number, edge: Edge) => void;
-  /** A drag let go: one drag is one undo step. */
-  onDragEnd: () => void;
+  onMoveLayer: (bar: LayerBar, start: number, end: number, edge: Edge) => void;
+  onPickBlock?: (id: string, t: number) => void;
+  /** A clip dragged to a new place in the order. */
+  onMoveBlock?: (id: string, index: number) => void;
+  /** A clip's edge dragged by `by` seconds (positive is later). */
+  onTrimBlock?: (id: string, edge: "start" | "end", by: number) => void;
 };
 
 const STRIP_HEIGHT = 48;
@@ -50,14 +61,18 @@ const LANES: [LayerKind, string][] = [
   ["overlay", "Video"],
   ["sound", "Sound"],
 ];
+const scrolls = new Map<string, number>();
+
+type Ghost = { key: string; start: number; end: number };
 
 export default function Timeline(p: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const tracks = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [viewWidth, setViewWidth] = useState(800);
-  // The layer being dragged, for its time label.
-  const [dragging, setDragging] = useState<LayerRef | null>(null);
+  // What's being dragged, drawn where it would land; nothing changes
+  // until it's let go.
+  const [ghost, setGhost] = useState<Ghost | null>(null);
 
   useLayoutEffect(() => {
     const el = scroller.current!;
@@ -69,6 +84,14 @@ export default function Timeline(p: Props) {
   const width = Math.max(200, viewWidth * p.zoom);
   const pps = width / Math.max(p.duration, 0.001);
   const x = (t: number) => t * pps;
+
+  // Back where it was scrolled, once it's as wide as it was.
+  const restored = useRef(false);
+  useLayoutEffect(() => {
+    if (restored.current || viewWidth === 800) return;
+    restored.current = true;
+    scroller.current!.scrollLeft = scrolls.get(p.scrollKey) ?? 0;
+  }, [viewWidth]);
 
   // Keep the playhead in view while playing zoomed in.
   useEffect(() => {
@@ -110,7 +133,13 @@ export default function Timeline(p: Props) {
     el.scrollLeft = PAD + a.t * pps - a.cx;
   }, [width]);
 
-  // Waveform: bars mirrored around the middle, red where they're cut.
+  const pictureAt = (t: number) => {
+    for (let i = p.pictures.length - 1; i >= 0; i--) if (t >= p.pictures[i].start && t < p.pictures[i].end) return p.pictures[i];
+    return null;
+  };
+
+  // Waveform: bars mirrored around the middle, red where they're cut;
+  // each column shows the loudest moment of the source it covers.
   useEffect(() => {
     const c = canvas.current;
     if (!c) return;
@@ -121,38 +150,29 @@ export default function Timeline(p: Props) {
     c.height = h;
     const ctx = c.getContext("2d")!;
     ctx.clearRect(0, 0, w, h);
-    if (!p.wave || p.wave.length === 0) return;
     const step = Math.max(1, Math.round(2 * dpr));
+    const span = (step / w) * p.duration;
     const isCut = (t: number) => p.cuts.some((r) => t >= r.start && t < r.end);
+    ctx.globalAlpha = 0.85;
     for (let px = 0; px < w; px += step) {
-      const from = Math.floor((px / w) * p.wave.length);
-      const to = Math.max(from + 1, Math.floor(((px + step) / w) * p.wave.length));
+      const t = (px / w) * p.duration;
+      const pic = pictureAt(t);
+      if (!pic?.wave?.length) continue;
+      const bins = pic.wave.length / Math.max(pic.sourceDuration, 0.001);
+      const from = Math.floor(pic.toSource(t) * bins);
+      const to = Math.max(from + 1, Math.min(from + Math.ceil(span * bins * 2), Math.floor(pic.toSource(Math.min(pic.end, t + span)) * bins)));
       let v = 0;
-      for (let i = from; i < to && i < p.wave.length; i++) v = Math.max(v, p.wave[i]);
+      for (let i = Math.max(0, from); i < to && i < pic.wave.length; i++) v = Math.max(v, pic.wave[i]);
       const bar = Math.max(1, v * (h - 4));
-      ctx.fillStyle = isCut(((px + step / 2) / w) * p.duration) ? "#ff5470" : "#8a8fff";
-      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = isCut(t + span / 2) ? "#ff5470" : "#8a8fff";
       ctx.fillRect(px, (h - bar) / 2, Math.max(1, step - dpr), bar);
     }
-  }, [p.wave, p.cuts, width, p.duration]);
+  }, [p.pictures, p.cuts, width, p.duration]);
 
   // Ruler ticks at a step that leaves room for their labels.
   const tickStep = TICK_STEPS.find((s) => s * pps >= 72) ?? 3600;
   const ticks: number[] = [];
   for (let t = 0; t <= p.duration; t += tickStep) ticks.push(t);
-
-  // Filmstrip tiles: as many as fit, each showing the thumbnail nearest
-  // its own time.
-  const tiles: { left: number; index: number }[] = [];
-  let tileWidth = 0;
-  if (p.strip) {
-    tileWidth = (STRIP_HEIGHT * p.strip.thumb_width) / p.strip.thumb_height;
-    for (let left = 0; left < width; left += tileWidth) {
-      const t = ((left + tileWidth / 2) / width) * p.duration;
-      tiles.push({ left, index: Math.min(p.strip.count - 1, Math.floor((t / p.duration) * p.strip.count)) });
-    }
-  }
-  const stripUrl = p.strip ? convertFileSrc(p.strip.path) : "";
 
   const timeAt = (clientX: number) => {
     const rect = tracks.current!.getBoundingClientRect();
@@ -211,29 +231,32 @@ export default function Timeline(p: Props) {
     );
   };
 
+  /** The nearest thing to snap to, within reach on screen; Alt drags freely. */
+  const snapper = (points: number[]) => (t: number, free: boolean) => {
+    if (free) return null;
+    let best: number | null = null;
+    for (const q of points) if (Math.abs(q - t) * pps <= SNAP_PX && (best === null || Math.abs(q - t) < Math.abs(best - t))) best = q;
+    return best;
+  };
+
   // Layers: the middle moves, the edges trim. Edges snap to the playhead,
-  // the clip's ends, cuts and other layers; Alt drags freely.
+  // the ends of clips, cuts and other layers.
   const dragLayer = (e: React.MouseEvent, bar: LayerBar, edge: Edge) => {
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
-    p.onPickLayer(bar.ref);
+    const key = layerKey(bar.clip, bar.ref);
     const { start: s0, end: e0 } = bar;
     const length = e0 - s0;
-    const points = [
+    const snap = snapper([
       0,
       p.duration,
       p.time,
       ...p.cuts.flatMap((c) => [c.start, c.end]),
-      ...p.layers.filter((b) => !sameLayer(b.ref, bar.ref)).flatMap((b) => [b.start, b.end]),
-    ];
-    const snap = (t: number, free: boolean): number | null => {
-      if (free) return null;
-      let best: number | null = null;
-      for (const q of points) if (Math.abs(q - t) * pps <= SNAP_PX && (best === null || Math.abs(q - t) < Math.abs(best - t))) best = q;
-      return best;
-    };
-    setDragging(bar.ref);
+      ...(p.blocks ?? []).flatMap((b) => [b.start, b.end]),
+      ...p.layers.filter((b) => layerKey(b.clip, b.ref) !== key).flatMap((b) => [b.start, b.end]),
+    ]);
+    let landed = { start: s0, end: e0 };
     follow(
       e,
       (dt, ev) => {
@@ -257,19 +280,62 @@ export default function Timeline(p: Props) {
           end = snap(end, ev.altKey) ?? end;
           end = Math.min(bar.latest, Math.max(s0 + MIN_LENGTH, end));
         }
-        p.onMoveLayer(bar.ref, start, end, edge);
+        landed = { start, end };
+        setGhost({ key, start, end });
       },
       (moved) => {
-        setDragging(null);
-        p.onDragEnd();
+        setGhost(null);
+        if (moved) p.onMoveLayer(bar, landed.start, landed.end, edge);
+        p.onPickLayer(bar);
         // A click shows it: jump there unless the playhead's already inside.
         if (!moved && !(p.time >= s0 && p.time < e0)) p.onSeek(s0);
       },
     );
   };
 
+  // Clips: the middle reorders, the edges trim the clip's start or end.
+  const dragBlock = (e: React.MouseEvent, block: ClipBlock, edge: Edge) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const key = `clip:${block.id}`;
+    const { start: s0, end: e0 } = block;
+    const others = (p.blocks ?? []).filter((b) => b.id !== block.id);
+    const snap = snapper([p.time, ...others.flatMap((b) => [b.start, b.end])]);
+    let by = 0;
+    const t0 = timeAt(e.clientX);
+    follow(
+      e,
+      (dt, ev) => {
+        if (edge === "move") {
+          by = dt;
+          setGhost({ key, start: s0 + dt, end: e0 + dt });
+        } else if (edge === "start") {
+          const start = Math.max(0, Math.min(e0 - 0.3, snap(s0 + dt, ev.altKey) ?? s0 + dt));
+          by = start - s0;
+          setGhost({ key, start, end: e0 });
+        } else {
+          const end = Math.max(s0 + 0.3, snap(e0 + dt, ev.altKey) ?? e0 + dt);
+          by = end - e0;
+          setGhost({ key, start: s0, end });
+        }
+      },
+      (moved) => {
+        setGhost(null);
+        if (!moved) return p.onPickBlock?.(block.id, t0);
+        if (edge === "move") {
+          const mid = (s0 + e0) / 2 + by;
+          p.onMoveBlock?.(block.id, others.filter((b) => (b.start + b.end) / 2 < mid).length);
+        } else if (Math.abs(by) > 0.02) p.onTrimBlock?.(block.id, edge, by);
+      },
+    );
+  };
+
+  const placed = <T extends { start: number; end: number }>(key: string, item: T) =>
+    ghost?.key === key ? { ...item, start: ghost.start, end: ghost.end } : item;
+
   return (
-    <div className="timeline-scroll" ref={scroller}>
+    <div className="timeline-scroll" ref={scroller} onScroll={(e) => scrolls.set(p.scrollKey, e.currentTarget.scrollLeft)}>
       <div className="tracks" style={{ width }} onMouseDown={onMouseDown} ref={tracks}>
         <div className="ruler">
           {ticks.map((t) => (
@@ -278,18 +344,65 @@ export default function Timeline(p: Props) {
             </span>
           ))}
         </div>
+        {p.blocks && (
+          <div className="clip-row">
+            {p.blocks.map((raw) => {
+              const key = `clip:${raw.id}`;
+              const b = placed(key, raw);
+              return (
+                <div
+                  key={raw.id}
+                  className={`clip-block${raw.active ? " active" : ""}${ghost?.key === key ? " dragging" : ""}`}
+                  style={{ left: x(b.start), width: Math.max(10, x(b.end - b.start)) }}
+                  title={`Clip ${raw.n}: ${raw.label}, ${clock(raw.end - raw.start, true)}. Click to edit it, drag to reorder, drag an edge to trim.`}
+                  onMouseDown={(e) => dragBlock(e, raw, "move")}
+                >
+                  {raw.transition && <span className="clip-join" title={raw.transition} />}
+                  <span className="layer-name">
+                    <b>{raw.n}</b> {raw.label}
+                  </span>
+                  <div className="grip start" onMouseDown={(e) => dragBlock(e, raw, "start")} />
+                  <div className="grip end" onMouseDown={(e) => dragBlock(e, raw, "end")} />
+                  {ghost?.key === key && (
+                    <span className="drag-tip">
+                      {clock(b.start, true)}–{clock(b.end, true)} · {(b.end - b.start).toFixed(1)} s
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div className="strip">
-          {tiles.map((tile) => (
-            <div
-              key={tile.left}
-              style={{
-                width: tileWidth,
-                backgroundImage: `url("${stripUrl}")`,
-                backgroundSize: `${p.strip!.count * tileWidth}px ${STRIP_HEIGHT}px`,
-                backgroundPosition: `${-tile.index * tileWidth}px 0`,
-              }}
-            />
-          ))}
+          {p.pictures.map((pic, i) => {
+            const left = x(pic.start);
+            const w = x(pic.end - pic.start);
+            const tiles: { left: number; index: number }[] = [];
+            const tileWidth = pic.strip ? (STRIP_HEIGHT * pic.strip.thumb_width) / pic.strip.thumb_height : 0;
+            if (pic.strip && tileWidth > 0) {
+              for (let l = 0; l < w; l += tileWidth) {
+                const s = pic.toSource(pic.start + Math.min(w, l + tileWidth / 2) / pps);
+                tiles.push({ left: l, index: Math.min(pic.strip.count - 1, Math.floor((s / pic.sourceDuration) * pic.strip.count)) });
+              }
+            }
+            const url = pic.strip ? convertFileSrc(pic.strip.path) : "";
+            return (
+              <div key={i} className="pic" style={{ left, width: w }}>
+                {tiles.map((tile) => (
+                  <div
+                    key={tile.left}
+                    style={{
+                      left: tile.left,
+                      width: tileWidth,
+                      backgroundImage: `url("${url}")`,
+                      backgroundSize: `${pic.strip!.count * tileWidth}px ${STRIP_HEIGHT}px`,
+                      backgroundPosition: `${-tile.index * tileWidth}px 0`,
+                    }}
+                  />
+                ))}
+              </div>
+            );
+          })}
         </div>
         <canvas className="wave" ref={canvas} style={{ width }} />
         <div className="lanes">
@@ -297,25 +410,29 @@ export default function Timeline(p: Props) {
             <div key={kind} className={`lane lane-${kind}`}>
               <span className="lane-label">{label}</span>
               {p.layers
-                .filter((b) => b.ref.kind === kind)
-                .map((b) => {
+                .filter((raw) => raw.ref.kind === kind)
+                .map((raw) => {
+                  const key = layerKey(raw.clip, raw.ref);
+                  const b = placed(key, raw);
                   const left = x(b.start);
-                  // Sounds and videos can run past the clip; draw them to its end.
+                  // Sounds and videos can run past the end; draw them to it.
                   const w = Math.max(8, Math.min(width - left, x(b.end - b.start)));
-                  const on = sameLayer(b.ref, p.selectedLayer);
                   const runsOn = b.end > p.duration + 0.05;
+                  // A title inside a cut plays for no time at all.
+                  const gone = b.end - b.start < 0.05;
+                  const note = gone ? " (inside a cut, so it doesn't show)" : runsOn ? " (carries on past the end)" : "";
                   return (
                     <div
-                      key={b.ref.index}
-                      className={`layer-bar${on ? " on" : ""}${runsOn ? " runs-on" : ""}`}
+                      key={key}
+                      className={`layer-bar${key === p.selectedKey ? " on" : ""}${runsOn ? " runs-on" : ""}${gone ? " gone" : ""}`}
                       style={{ left, width: w }}
-                      title={`${b.label}: ${clock(b.start, true)}–${clock(b.end, true)}${runsOn ? " (carries on into the next clips)" : ""}. Drag to move, drag an edge to trim.`}
-                      onMouseDown={(e) => dragLayer(e, b, "move")}
+                      title={`${b.label}: ${clock(b.start, true)}–${clock(b.end, true)}${note}. Drag to move, drag an edge to trim.`}
+                      onMouseDown={(e) => dragLayer(e, raw, "move")}
                     >
                       <span className="layer-name">{b.label}</span>
-                      <div className="grip start" onMouseDown={(e) => dragLayer(e, b, "start")} />
-                      <div className="grip end" onMouseDown={(e) => dragLayer(e, b, "end")} />
-                      {sameLayer(b.ref, dragging) && (
+                      <div className="grip start" onMouseDown={(e) => dragLayer(e, raw, "start")} />
+                      <div className="grip end" onMouseDown={(e) => dragLayer(e, raw, "end")} />
+                      {ghost?.key === key && (
                         <span className="drag-tip">
                           {clock(b.start, true)}–{clock(b.end, true)} · {(b.end - b.start).toFixed(1)} s
                         </span>

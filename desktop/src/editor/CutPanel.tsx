@@ -129,15 +129,8 @@ export default function CutPanel({ ed }: { ed: EditorApi }) {
         Drag across the timeline to select (drag its edges to adjust), then press <kbd>X</kbd>. <kbd>I</kbd> and <kbd>O</kbd> set the start
         and end at the playhead. Made a mistake? <kbd>Ctrl+Z</kbd> undoes it.
       </p>
-      <button
-        className="btn wide"
-        disabled={!ed.selection}
-        onClick={() => {
-          ed.setManualCuts([...ed.manualCuts, ed.selection!]);
-          ed.setSelection(null);
-        }}
-      >
-        Cut the selection {ed.selection ? `(${span(ed.selection.end - ed.selection.start)})` : ""}
+      <button className="btn wide" disabled={!ed.cutSelection} onClick={() => ed.cutSelection?.()}>
+        Cut the selection {ed.cutSelection ? `(${span(ed.selectionLength)})` : ""}
       </button>
       <div className="row" style={{ marginTop: 8 }}>
         <button

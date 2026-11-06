@@ -231,8 +231,19 @@ session back if the window was closed without saving.
   **one encode** (`ops::render_project`), optionally two-passed under a
   file size. GIFs from the selection.
 
-**The timeline** shows a clip's filmstrip and waveform with what's cut
-in red, and under them a lane each for its text, video layers and sounds.
+**The timeline** shows the **whole video** by default: every clip end to
+end, as long as it plays after its cuts (a transition overlaps two), one
+playhead across them all, and play runs on from clip to clip. Click
+anywhere to jump there, in whichever clip plays it. Drag a clip's block to
+reorder it, or its edges to trim its start or end (the cut Q or W makes,
+moved). A selection can span clips: <kbd>X</kbd> cuts it from each one.
+Layers drag between clips too: text, b-roll or a sound dropped on another
+clip moves into it, at the moment under it. **This clip** switches to one
+clip in its own time, with what's cut still shown in red, for precise
+trimming; edits there are the same edits.
+
+Both show a filmstrip and waveform, and under them a lane each for text,
+video layers and sounds.
 Drag a layer to move it and its edges to trim it (a video or sound's start
 edge starts the file later; it can't stretch past the file's own length);
 edges snap to the playhead, the clip's ends, cuts and other layers, and
@@ -310,6 +321,6 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 1. **Adaptive streaming**: encode a 1080/720/480/240 ladder with aligned keyframes, package as HLS/DASH.
 2. **Auto-highlights**: done for activity (loudness, motion, cuts); next, transcript-aware picks.
 3. **Subtitles**: done (Whisper → SRT/VTT, styled burn-in, editing by transcript); next, word-level timing.
-4. **Desktop editor**: clips, video layers (b-roll, picture-in-picture), titles, music, sounds and clip volume, transitions (with previews), zoom & pan, saved projects, word highlighting, layer lanes with drag and trim, and project-wide undo done; next, a whole-video timeline across clips, a Windows installer, beat-synced cuts, stickers and images, speed ramps.
+4. **Desktop editor**: clips, video layers (b-roll, picture-in-picture), titles, music, sounds and clip volume, transitions (with previews), zoom & pan, saved projects, word highlighting, layer lanes with drag and trim, and project-wide undo done, and a whole-video timeline across clips done; next, a Windows installer, beat-synced cuts, stickers and images, speed ramps.
 5. **Live recorder**: watch a channel, record when it goes live, handle stream drops.
 6. **Enhancement**: Real-ESRGAN upscaling, RIFE interpolation, Demucs stem separation.

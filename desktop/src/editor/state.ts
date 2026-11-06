@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import type {
   CaptionStyle,
   EditPlan,
+  Filmstrip,
   Frame,
   Highlight,
   Keyframe,
@@ -69,8 +70,11 @@ export type LayerKind = "title" | "overlay" | "sound";
 export type LayerRef = { kind: LayerKind; index: number };
 export const sameLayer = (a: LayerRef | null, b: LayerRef | null) => !!a && !!b && a.kind === b.kind && a.index === b.index;
 
-/** A layer as the timeline draws it, in the clip's source time. */
+/** A layer as the timeline draws it: in the clip's source time on the
+ * clip timeline, in output time on the whole-video one. */
 export type LayerBar = {
+  /** The clip it belongs to. */
+  clip: string;
   ref: LayerRef;
   start: number;
   end: number;
@@ -171,6 +175,10 @@ export type EditorApi = {
   spec: ClipSpec;
   /** An export finished, for the quick-start checklist. */
   onExported: () => void;
+  /** Cuts what's selected on the timeline showing (across clips on the
+   * whole video), or null when nothing is. */
+  cutSelection: (() => void) | null;
+  selectionLength: number;
 };
 
 /** Output frame size: the project frame, else the first clip's. */
@@ -199,6 +207,36 @@ export function motionAt(keys: Keyframe[], t: number): { zoom: number; x: number
     }
   }
   return k[k.length - 1];
+}
+
+/** One layer, across the whole project. */
+export const layerKey = (clip: string, ref: LayerRef) => `${clip}:${ref.kind}:${ref.index}`;
+
+/** The pictures under a timeline: a clip's filmstrip and waveform, laid
+ * from `start` to `end` on the timeline, `toSource` mapping back into the
+ * clip's own time. One for the clip timeline; one per clip for the whole video. */
+export type Picture = {
+  start: number;
+  end: number;
+  strip: Filmstrip | null;
+  wave: number[] | null;
+  sourceDuration: number;
+  toSource: (t: number) => number;
+};
+
+/** A clip on the whole-video timeline. */
+export type ClipBlock = { id: string; n: number; label: string; start: number; end: number; active: boolean; transition: string | null };
+
+/** The source moment that plays at `o` into the clip's output: the inverse
+ * of `toOutput`. A join between kept ranges maps to the end of the first. */
+export function fromOutput(keep: Range[], o: number): number {
+  let out = 0;
+  for (const k of keep) {
+    const length = k.end - k.start;
+    if (o <= out + length) return k.start + Math.max(0, o - out);
+    out += length;
+  }
+  return keep.length ? keep[keep.length - 1].end : o;
 }
 
 /** Where source time `t` plays in the clip's output (cut time snaps to

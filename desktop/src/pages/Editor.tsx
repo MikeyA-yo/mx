@@ -50,14 +50,18 @@ import { useHistory, type History } from "../editor/history";
 import { useLengths } from "../editor/lengths";
 import { coreProject, projectFile, readProjectFile } from "../editor/exporting";
 import {
+  fromOutput,
+  layerKey,
   motionAt,
   outputSize,
   toOutput,
   type ClipEditorState,
   type ClipSpec,
+  type ClipBlock,
   type EditorApi,
   type LayerBar,
   type LayerRef,
+  type Picture,
   type Pauses,
   type PlacedOverlay,
   type PlacedSound,
@@ -86,6 +90,33 @@ const TRANSITIONS: [TransitionKind | "", string][] = [
 const overlapOf = (t: Transition | null, before: number, after: number) => {
   const d = Math.min(t?.duration ?? 0, before / 2, after / 2);
   return d < 0.04 ? 0 : d;
+};
+
+/** A clip's filmstrip and waveform, shared for the whole-video timeline. */
+type Assets = { strip: Filmstrip | null; wave: number[] | null };
+type Edge = "move" | "start" | "end";
+
+/** The whole-video timeline: what it shows, in output time, and the
+ * edits it makes across clips. The clip on screen draws it. */
+type VideoTimeline = {
+  mode: "video" | "clip";
+  setMode: (m: "video" | "clip") => void;
+  duration: number;
+  pictures: Picture[];
+  blocks: ClipBlock[];
+  layers: LayerBar[];
+  selection: Range | null;
+  setSelection: (r: Range | null) => void;
+  zoom: number;
+  setZoom: (z: number) => void;
+  /** Jumps to a moment of the output, in whichever clip plays it. */
+  seek: (t: number, play?: boolean) => void;
+  pickLayer: (bar: LayerBar | null) => void;
+  moveLayer: (bar: LayerBar, start: number, end: number, edge: Edge) => void;
+  moveBlock: (id: string, index: number) => void;
+  trimBlock: (id: string, edge: "start" | "end", by: number) => void;
+  /** Cuts a stretch of the output, from every clip it covers. */
+  cut: (r: Range) => void;
 };
 
 /** A clip in the project; `initial` restores a saved editor. */
@@ -119,6 +150,15 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   // Playing through: the clip to start next, and a counter so the same
   // clip can be asked twice.
   const [playNext, setPlayNext] = useState<{ id: string; n: number } | null>(null);
+  // The whole-video timeline: which view, its zoom and selection, and a
+  // clip asked to jump to a moment.
+  const [assets, setAssets] = useState<Record<string, Assets>>({});
+  const onAssets = useCallback((id: string, a: Assets) => setAssets((all) => ({ ...all, [id]: a })), []);
+  const [mode, setMode] = useState<"video" | "clip">(load("timeline.mode", "video"));
+  useEffect(() => store("timeline.mode", mode), [mode]);
+  const [videoZoom, setVideoZoom] = useState(1);
+  const [videoSelection, setVideoSelection] = useState<Range | null>(null);
+  const [seekTo, setSeekTo] = useState<{ id: string; t: number; play: boolean; n: number } | null>(null);
 
   // Undo: each clip registers its setters by id, so a step can be put back
   // even into a clip that was removed and has come back.
@@ -188,6 +228,20 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     .map((c, i): ClipSpec | undefined => specs[c.id] && { ...specs[c.id], transition: i === 0 ? null : (transitions[c.id] ?? null) })
     .filter((s): s is ClipSpec => !!s);
   const first = ordered[0]?.media;
+
+  // Each clip's start on the output, overlapping by its transition.
+  let offset = 0;
+  let previous = 0;
+  const offsets: Record<string, number> = {};
+  clips.forEach((c, i) => {
+    const d = specs[c.id]?.outputDuration ?? 0;
+    const o = i === 0 ? 0 : overlapOf(transitions[c.id] ?? null, previous, d);
+    offset -= o;
+    offsets[c.id] = offset;
+    offset += d;
+    previous = d;
+  });
+  const lengths = useLengths(ordered.flatMap((c) => [...c.overlays.map((o) => o.source), ...c.sounds.map((s) => s.source)]));
 
   // Caption placement follows the output frame's orientation.
   const [outW, outH] = first ? outputSize(frame, first) : [1920, 1080];
@@ -347,18 +401,179 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     return <Empty onOpen={onOpen} onOpenProject={openFile} error={fileError} onUndo={undo} />;
   }
 
-  // Each clip's start on the output, overlapping by its transition.
-  let offset = 0;
-  let previous = 0;
-  const offsets: Record<string, number> = {};
-  clips.forEach((c, i) => {
-    const d = specs[c.id]?.outputDuration ?? 0;
-    const o = i === 0 ? 0 : overlapOf(transitions[c.id] ?? null, previous, d);
-    offset -= o;
-    offsets[c.id] = offset;
-    offset += d;
-    previous = d;
+  // The whole-video timeline. Everything on it is in output time; edits
+  // go back into each clip's own time through its kept ranges.
+  const startOf = (c: ClipSpec) => offsets[c.id] ?? 0;
+  /** The clip playing at output time `t`: the later one where two overlap. */
+  const clipAt = (t: number) => {
+    let found: ClipSpec | undefined = ordered[0];
+    for (const c of ordered) if (t >= startOf(c) - 1e-6) found = c;
+    return found;
+  };
+  const sourceAt = (c: ClipSpec, t: number) => Math.min(c.media.duration, fromOutput(c.keep, Math.max(0, t - startOf(c))));
+  const seekVideo = (t: number, play = false) => {
+    const c = clipAt(t);
+    if (!c) return;
+    setActive(c.id);
+    setSeekTo((q) => ({ id: c.id, t: sourceAt(c, t), play, n: (q?.n ?? 0) + 1 }));
+  };
+  /** Applies edits to clips' state as one undo step. */
+  const commit = (changes: { id: string; key: string; before: unknown; after: unknown }[]) => {
+    record(changes.map((c) => ({ scope: c.id, key: c.key, before: c.before, after: c.after })));
+    changes.forEach((c) => clipSetters.current[c.id]?.[c.key]?.(c.after as never));
+    history.seal();
+  };
+  const LISTS = { title: "titles", overlay: "overlays", sound: "sounds" } as const;
+  const videoLayers: LayerBar[] = ordered.flatMap((c) => {
+    const at = (t: number) => startOf(c) + toOutput(c.keep, t);
+    const end = startOf(c) + c.outputDuration;
+    const files = (kind: "overlay" | "sound", list: (Overlay | Sound)[]) =>
+      list.map((l, index): LayerBar => {
+        const fileLength = lengths.get(l.source) ?? l.offset + (l.duration ?? 3);
+        const start = at(l.at);
+        return {
+          clip: c.id,
+          ref: { kind, index },
+          start,
+          end: start + (l.duration ?? fileLength - l.offset),
+          label: baseName(l.source),
+          earliest: start - l.offset,
+          latest: start - l.offset + fileLength,
+          bounded: false,
+        };
+      });
+    return [
+      ...c.titles.map(
+        (t, index): LayerBar => ({
+          clip: c.id,
+          ref: { kind: "title", index },
+          start: at(t.start),
+          end: at(t.end),
+          label: t.text.trim() || "(empty text)",
+          earliest: startOf(c),
+          latest: end,
+          bounded: true,
+        }),
+      ),
+      ...files("overlay", c.overlays),
+      ...files("sound", c.sounds),
+    ];
   });
+  const video: VideoTimeline = {
+    mode,
+    setMode,
+    duration: Math.max(0.1, offset),
+    pictures: ordered.map((c) => ({
+      start: startOf(c),
+      end: startOf(c) + c.outputDuration,
+      strip: assets[c.id]?.strip ?? null,
+      wave: assets[c.id]?.wave ?? null,
+      sourceDuration: c.media.duration,
+      toSource: (t: number) => sourceAt(c, t),
+    })),
+    blocks: ordered.map((c) => {
+      const i = clips.findIndex((e) => e.id === c.id);
+      const t = i > 0 ? transitions[c.id] : null;
+      return {
+        id: c.id,
+        n: i + 1,
+        label: c.media.name,
+        start: startOf(c),
+        end: startOf(c) + c.outputDuration,
+        active: c.id === active,
+        transition: t ? `${TRANSITIONS.find(([k]) => k === t.kind)?.[1] ?? t.kind} from clip ${i}` : null,
+      };
+    }),
+    layers: videoLayers,
+    selection: videoSelection,
+    setSelection: setVideoSelection,
+    zoom: videoZoom,
+    setZoom: setVideoZoom,
+    seek: seekVideo,
+    pickLayer: (bar) => {
+      if (!bar) return clipSetters.current[active ?? ""]?.pickLayer?.(null as never);
+      if (bar.clip !== active) seekVideo(bar.start);
+      clipSetters.current[bar.clip]?.pickLayer?.(bar.ref as never);
+    },
+    // A layer dragged into another clip moves to it, keeping its length.
+    moveLayer: (bar, start, end, edge) => {
+      const c = ordered.find((s) => s.id === bar.clip);
+      if (!c) return;
+      const key = LISTS[bar.ref.kind];
+      const list = c[key] as (Title | Overlay | Sound)[];
+      const item = list[bar.ref.index];
+      if (!item) return;
+      const target = edge === "move" ? (clipAt(start + 1e-3) ?? c) : c;
+      let next: Title | Overlay | Sound;
+      if (bar.ref.kind === "title") {
+        const t = item as Title;
+        if (edge === "move") {
+          const s = sourceAt(target, Math.max(start, startOf(target)));
+          const e = sourceAt(target, Math.min(end, startOf(target) + target.outputDuration));
+          next = { ...t, start: s, end: e - s >= 0.1 ? e : Math.min(target.media.duration, s + (t.end - t.start)) };
+        } else next = edge === "start" ? { ...t, start: sourceAt(c, start) } : { ...t, end: sourceAt(c, end) };
+      } else {
+        const f = item as Overlay | Sound;
+        next =
+          edge === "move"
+            ? { ...f, at: sourceAt(target, start) }
+            : edge === "start"
+              ? { ...f, at: sourceAt(c, start), offset: Math.max(0, f.offset + start - bar.start), duration: end - start }
+              : { ...f, duration: end - start };
+      }
+      if (target.id === c.id) {
+        commit([{ id: c.id, key, before: list, after: list.map((l, i) => (i === bar.ref.index ? next : l)) }]);
+        clipSetters.current[c.id]?.pickLayer?.(bar.ref as never);
+        return;
+      }
+      const into = target[key] as (Title | Overlay | Sound)[];
+      commit([
+        { id: c.id, key, before: list, after: list.filter((_, i) => i !== bar.ref.index) },
+        { id: target.id, key, before: into, after: [...into, next] },
+      ]);
+      clipSetters.current[c.id]?.pickLayer?.(null as never);
+      clipSetters.current[target.id]?.pickLayer?.({ kind: bar.ref.kind, index: into.length } as never);
+      if (target.id !== active) seekVideo(start);
+    },
+    moveBlock: (id, index) => {
+      const from = clips.findIndex((c) => c.id === id);
+      if (from < 0 || from === index) return;
+      const next = clips.filter((c) => c.id !== id);
+      next.splice(index, 0, clips[from]);
+      record([{ scope: "project", key: "clips", before: clips, after: next }]);
+      setClips(next);
+    },
+    // Trimming a clip's edge is a cut from its start, or to its end: the
+    // one made by Q or W, moved.
+    trimBlock: (id, edge, by) => {
+      const c = ordered.find((s) => s.id === id);
+      if (!c) return;
+      const d = c.media.duration;
+      const cuts = c.editor.manualCuts;
+      let next: Range[];
+      if (edge === "start") {
+        const s = by >= 0 ? fromOutput(c.keep, by) : Math.max(0, (c.keep[0]?.start ?? 0) + by);
+        next = cuts.filter((r) => r.start > 1e-3);
+        if (s > 0.05) next.push({ start: 0, end: Math.min(s, d - 0.1) });
+      } else {
+        const s = by <= 0 ? fromOutput(c.keep, c.outputDuration + by) : Math.min(d, (c.keep[c.keep.length - 1]?.end ?? d) + by);
+        next = cuts.filter((r) => r.end < d - 1e-3);
+        if (s < d - 0.05) next.push({ start: Math.max(s, 0.1), end: d });
+      }
+      commit([{ id, key: "manualCuts", before: cuts, after: next }]);
+    },
+    cut: (r) => {
+      const changes = ordered.flatMap((c) => {
+        const a = Math.max(r.start, startOf(c));
+        const b = Math.min(r.end, startOf(c) + c.outputDuration);
+        if (b - a < 0.02) return [];
+        const cut = { start: sourceAt(c, a), end: sourceAt(c, b) };
+        const cuts = c.editor.manualCuts;
+        return [{ id: c.id, key: "manualCuts", before: cuts, after: [...cuts, cut] }];
+      });
+      if (changes.length) commit(changes);
+    },
+  };
   // Every sound on the output, for the preview: each starts where its
   // clip's moment plays and runs its length, past the clip if it's long.
   const placedSounds: PlacedSound[] = ordered.flatMap((spec) =>
@@ -451,7 +666,15 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
       <button className="btn small" onClick={async () => onOpen(await chooseMedia(true))} title="Add more videos after these">
         + Add clip
       </button>
-      <span className="faint" style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>
+      <div className="chips view-switch" style={{ marginLeft: "auto" }} data-tour="view-switch">
+        <button className={`chip${mode === "video" ? " on" : ""}`} onClick={() => setMode("video")} title="All the clips end to end, as the export plays them">
+          Whole video
+        </button>
+        <button className={`chip${mode === "clip" ? " on" : ""}`} onClick={() => setMode("clip")} title="The clip on screen, with what's cut shown in red">
+          This clip
+        </button>
+      </div>
+      <span className="faint" style={{ whiteSpace: "nowrap" }}>
         {clips.length > 1 ? `${clips.length} clips · ${clock(offset)}` : ""}
       </span>
     </div>
@@ -541,6 +764,9 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
             initial={c.initial}
             history={history}
             register={register}
+            video={video}
+            seekTo={seekTo?.id === c.id ? seekTo : null}
+            onAssets={onAssets}
             onSpec={onSpec}
             onEnded={() => onEnded(c.id)}
             onClose={close}
@@ -653,6 +879,10 @@ type WorkspaceProps = {
   initial?: Saved;
   /** The project's undo history, which this clip's edits go into. */
   history: History;
+  video: VideoTimeline;
+  /** A moment of this clip to jump to, from the whole-video timeline. */
+  seekTo: { t: number; play: boolean; n: number } | null;
+  onAssets: (id: string, a: Assets) => void;
   register: (id: string, setters: Record<string, (v: never) => void>) => () => void;
   onSpec: (spec: ClipSpec) => void;
   onEnded: () => void;
@@ -732,6 +962,11 @@ function Workspace(p: WorkspaceProps) {
         volume: setVolume,
         removePauses: setRemovePauses,
         padding: setPadding,
+        // Not an edit: lets the whole-video timeline pick this clip's layers.
+        pickLayer: (l: LayerRef | null) => {
+          setLayer(l);
+          if (l) setTab(l.kind === "sound" ? "audio" : "titles");
+        },
       }),
     [p.id, register],
   );
@@ -743,6 +978,7 @@ function Workspace(p: WorkspaceProps) {
     const fileLength = lengths.get(l.source) ?? l.offset + (l.duration ?? 3);
     const length = l.duration ?? fileLength - l.offset;
     return {
+      clip: p.id,
       ref: { kind, index },
       start: l.at,
       end: l.at + length,
@@ -754,6 +990,7 @@ function Workspace(p: WorkspaceProps) {
   };
   const layerBars: LayerBar[] = [
     ...titles.map((t, index) => ({
+      clip: p.id,
       ref: { kind: "title" as const, index },
       start: t.start,
       end: t.end,
@@ -765,9 +1002,19 @@ function Workspace(p: WorkspaceProps) {
     ...overlays.map((o, i) => fileBar("overlay", i, o)),
     ...sounds.map((s, i) => fileBar("sound", i, s)),
   ];
+  // The clip timeline's picture: this clip, whole. Its filmstrip and
+  // waveform also go up to the whole-video timeline.
+  const clipPictures: Picture[] = useMemo(
+    () => (media ? [{ start: 0, end: media.duration, strip, wave, sourceDuration: media.duration, toSource: (t: number) => t }] : []),
+    [media, strip, wave],
+  );
+  const { onAssets } = p;
+  useEffect(() => onAssets(p.id, { strip, wave }), [strip, wave, onAssets, p.id]);
+
   // Dragged on the timeline: the middle moves it; the start edge trims
   // the head, starting the file later; the end edge sets its length.
   const moveLayer = (l: LayerRef, start: number, end: number, edge: "move" | "start" | "end") => {
+    setLayer(l);
     if (l.kind === "title") {
       edit.titles(titles.map((t, i) => (i === l.index ? { ...t, start, end } : t)));
       return;
@@ -1000,6 +1247,22 @@ function Workspace(p: WorkspaceProps) {
     setTime(v.currentTime);
     if (play) v.play();
   }, []);
+  // Asked to jump here by the whole-video timeline.
+  useEffect(() => {
+    const el = video.current;
+    const q = p.seekTo;
+    if (!q || !el) return;
+    el.currentTime = q.t;
+    setTime(q.t);
+    if (q.play) el.play().catch(() => {});
+  }, [p.seekTo?.n]);
+
+  // Which timeline is showing; on the whole-video one, times are the output's.
+  const v = p.video;
+  const wholeVideo = v.mode === "video";
+  const now = p.outputOffset + toOutput(plan.keep, time);
+  const shownSelection = wholeVideo ? v.selection : selection;
+
   const togglePlay = () => {
     const v = video.current;
     if (!v) return;
@@ -1016,6 +1279,14 @@ function Workspace(p: WorkspaceProps) {
     if (["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName) && (target as HTMLInputElement).type !== "range") return;
     const step = media.fps ? 1 / media.fps : 1 / 30;
     const k = e.key.toLowerCase();
+    // The whole-video timeline selects and cuts across clips.
+    if (wholeVideo) {
+      const done = () => e.preventDefault();
+      if (k === "i") return done(), v.setSelection({ start: now, end: Math.max(now + 0.1, v.selection?.end ?? v.duration) });
+      if (k === "o") return done(), v.setSelection({ start: Math.min(v.selection?.start ?? 0, now - 0.1), end: now });
+      if ((k === "x" || k === "delete" || k === "backspace") && v.selection) return done(), v.cut(v.selection), v.setSelection(null);
+      if (k === "escape") v.setSelection(null);
+    }
     if (k === " ") togglePlay();
     else if (k === "arrowleft") seek(time - (e.shiftKey ? 5 : 1));
     else if (k === "arrowright") seek(time + (e.shiftKey ? 5 : 1));
@@ -1083,6 +1354,10 @@ function Workspace(p: WorkspaceProps) {
           project,
           spec,
           onExported: () => setExported(true),
+          cutSelection: wholeVideo
+            ? v.selection && (() => (v.cut(v.selection!), v.setSelection(null)))
+            : selection && (() => (edit.manualCuts([...manualCuts, selection]), setSelection(null))),
+          selectionLength: shownSelection ? shownSelection.end - shownSelection.start : 0,
         }
       : null;
 
@@ -1200,8 +1475,8 @@ function Workspace(p: WorkspaceProps) {
           <button className="icon-btn big" onClick={togglePlay} title="Play/pause (Space)" data-tour="play">
             {playing ? <PauseIcon /> : <PlayIcon />}
           </button>
-          <span className="time">
-            {clock(time, true)} <span className="faint">/ {clock(media.duration)}</span>
+          <span className="time" title={wholeVideo ? `${clock(time, true)} into ${media.name}` : undefined}>
+            {clock(wholeVideo ? now : time, true)} <span className="faint">/ {clock(wholeVideo ? v.duration : media.duration)}</span>
           </span>
           <span className="muted">
             {plan.cuts.length > 0 && (
@@ -1211,9 +1486,9 @@ function Workspace(p: WorkspaceProps) {
             )}
           </span>
           <span className="grow" />
-          {selection ? (
+          {shownSelection ? (
             <span className="muted mono" title="Press X to cut it out, Esc to clear">
-              {clock(selection.start, true)}–{clock(selection.end, true)} selected
+              {clock(shownSelection.start, true)}–{clock(shownSelection.end, true)} selected
             </span>
           ) : (
             <span className="faint ellipsis">Click the timeline to jump · drag across it to select</span>
@@ -1226,8 +1501,8 @@ function Workspace(p: WorkspaceProps) {
             min={1}
             max={40}
             step={0.5}
-            value={zoom}
-            onChange={(e) => setZoom(Number(e.target.value))}
+            value={wholeVideo ? v.zoom : zoom}
+            onChange={(e) => (wholeVideo ? v.setZoom : setZoom)(Number(e.target.value))}
             style={{ width: 110 }}
             title="Stretch the timeline to cut more precisely"
           />
@@ -1256,26 +1531,54 @@ function Workspace(p: WorkspaceProps) {
       <div className="timeline">
         {p.sequence}
         <div data-tour="timeline">
-          <Timeline
-            duration={media.duration}
-            time={time}
-            playing={playing}
-            strip={strip}
-            wave={wave}
-            cuts={plan.cuts}
-            selection={selection}
-            highlights={highlights ?? []}
-            keyframes={motion.map((k) => k.time)}
-            layers={layerBars}
-            selectedLayer={layer}
-            zoom={zoom}
-            onZoom={setZoom}
-            onSeek={seek}
-            onSelect={setSelection}
-            onPickLayer={pickLayer}
-            onMoveLayer={moveLayer}
-            onDragEnd={p.history.seal}
-          />
+          {!p.active ? null : wholeVideo ? (
+            <Timeline
+              duration={v.duration}
+              time={now}
+              playing={playing}
+              pictures={v.pictures}
+              cuts={[]}
+              selection={v.selection}
+              highlights={[]}
+              keyframes={[]}
+              layers={v.layers}
+              selectedKey={layer ? layerKey(p.id, layer) : null}
+              blocks={v.blocks}
+              zoom={v.zoom}
+              onZoom={v.setZoom}
+              scrollKey="video"
+              onSeek={(t) => v.seek(t)}
+              onSelect={v.setSelection}
+              onPickLayer={v.pickLayer}
+              onMoveLayer={v.moveLayer}
+              onPickBlock={(_, t) => v.seek(t)}
+              onMoveBlock={v.moveBlock}
+              onTrimBlock={v.trimBlock}
+            />
+          ) : (
+            <Timeline
+              duration={media.duration}
+              time={time}
+              playing={playing}
+              pictures={clipPictures}
+              cuts={plan.cuts}
+              selection={selection}
+              highlights={highlights ?? []}
+              keyframes={motion.map((k) => k.time)}
+              layers={layerBars}
+              selectedKey={layer ? layerKey(p.id, layer) : null}
+              zoom={zoom}
+              onZoom={setZoom}
+              scrollKey={p.id}
+              onSeek={seek}
+              onSelect={setSelection}
+              onPickLayer={(bar) => pickLayer(bar?.ref ?? null)}
+              onMoveLayer={(bar, start, end, edge) => {
+                moveLayer(bar.ref, start, end, edge);
+                p.history.seal();
+              }}
+            />
+          )}
         </div>
       </div>
     </div>

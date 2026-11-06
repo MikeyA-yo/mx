@@ -83,8 +83,9 @@ const TOURS: Record<TourName, Step[]> = {
       title: "Timeline",
       body: (
         <>
-          Click to jump to a moment. Drag across it to select a part, then press <kbd>X</kbd> to cut it out; red is what's cut. Below, the text,
-          videos and sounds you add: drag one to move it, or its edges to make it shorter or longer.
+          Your whole video, every clip end to end. Click to jump to a moment; drag across it to select a part, then press <kbd>X</kbd> to cut
+          it out. Drag a clip to reorder it, or its edges to trim it. Below, the text, videos and sounds you add: drag one to move it (even into
+          another clip), or its edges to make it shorter or longer.
         </>
       ),
       place: ["above"],
@@ -94,6 +95,12 @@ const TOURS: Record<TourName, Step[]> = {
       title: "Your clips",
       body: "Every file you open is a clip, played in this order. Add more, reorder them, and choose how one changes to the next.",
       place: ["above", "below"],
+    },
+    {
+      target: "view-switch",
+      title: "Whole video or one clip",
+      body: "Whole video shows everything as it will play. This clip shows just the clip on screen, with what's cut still there in red, for precise trimming.",
+      place: ["above", "left"],
     },
     {
       target: "checklist",
