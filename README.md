@@ -189,7 +189,9 @@ caption style and music belong to the whole project. Playback runs on
 from one clip into the next, with the music in step. Between clips, the
 clip bar picks a transition: crossfade, through black, wipe, slide,
 circle or zoom (`xfade`, with the sound crossfaded too); it overlaps the
-two clips, so the video gets shorter by its length.
+two clips, so the video gets shorter by its length. ▶ beside it renders
+the few seconds around the join at 360p with the export's own filters and
+plays them.
 
 **Projects** save as `.mxp` (<kbd>Ctrl+S</kbd>, <kbd>Ctrl+Shift+S</kbd> to
 save as): mx-core's project JSON, which `mx render` reads, plus each
@@ -209,7 +211,10 @@ session back if the window was closed without saving.
 - **Picks**: the liveliest stretches (highlights), marked on the
   timeline, exported as clips.
 - **Frame**: 9:16, 1:1, 4:5 or 16:9 with a blurred background, a crop
-  (with position) or bars, previewed live.
+  (with position) or bars, previewed live. Below it, **zoom & pan** for
+  the clip on screen: presets (slow zoom in/out, punch-in, pan across) or
+  keyframes of zoom and position, eased between (a `scale` evaluated per
+  frame, then a `crop` that follows the keyframed point).
 - **Music**: a soundtrack under everything that loops if it's short,
   starts where you choose in the song, fades out, and ducks under the
   clips' own sound (`sidechaincompress` keyed on it).
@@ -270,6 +275,6 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 1. **Adaptive streaming**: encode a 1080/720/480/240 ladder with aligned keyframes, package as HLS/DASH.
 2. **Auto-highlights**: done for activity (loudness, motion, cuts); next, transcript-aware picks.
 3. **Subtitles**: done (Whisper → SRT/VTT, styled burn-in, editing by transcript); next, word-level timing.
-4. **Desktop editor**: clips, titles, music, transitions, saved projects and word highlighting done; next, keyframed zoom/pan, stickers, preview of transitions.
+4. **Desktop editor**: clips, titles, music, transitions (with previews), zoom & pan, saved projects and word highlighting done; next, stickers and image overlays, speed ramps, audio-only tracks.
 5. **Live recorder**: watch a channel, record when it goes live, handle stream drops.
 6. **Enhancement**: Real-ESRGAN upscaling, RIFE interpolation, Demucs stem separation.

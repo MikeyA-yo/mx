@@ -80,9 +80,48 @@ pub fn map_range(keep: &[Range], range: Range) -> Vec<Range> {
     out
 }
 
+/// The first `secs` of kept time from `keep` (sorted).
+pub fn head(keep: &[Range], secs: f64) -> Vec<Range> {
+    let mut left = secs;
+    let mut out = Vec::new();
+    for r in keep {
+        if left <= 0.0 {
+            break;
+        }
+        let take = r.len().min(left);
+        out.push(Range::new(r.start, r.start + take));
+        left -= take;
+    }
+    out
+}
+
+/// The last `secs` of kept time from `keep` (sorted).
+pub fn tail(keep: &[Range], secs: f64) -> Vec<Range> {
+    let mut left = secs;
+    let mut out = Vec::new();
+    for r in keep.iter().rev() {
+        if left <= 0.0 {
+            break;
+        }
+        let take = r.len().min(left);
+        out.push(Range::new(r.end - take, r.end));
+        left -= take;
+    }
+    out.reverse();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn head_and_tail_take_kept_time_across_ranges() {
+        let keep = [r(0.0, 2.0), r(5.0, 6.0), r(8.0, 10.0)];
+        approx(&head(&keep, 2.5), &[(0.0, 2.0), (5.0, 5.5)]);
+        approx(&tail(&keep, 2.5), &[(5.5, 6.0), (8.0, 10.0)]);
+        approx(&tail(&keep, 99.0), &[(0.0, 2.0), (5.0, 6.0), (8.0, 10.0)]);
+    }
 
     #[test]
     fn ranges_map_onto_the_output_timeline() {

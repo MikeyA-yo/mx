@@ -5,10 +5,12 @@ use std::sync::OnceLock;
 
 use anyhow::{Result, anyhow, bail};
 use mx_core::ffmpeg::encoders::{self, Codec, Encoder};
-use mx_core::ffmpeg::ops::{self, CompressCodec, GifOptions, VideoEncode};
+use mx_core::cache;
+use mx_core::ffmpeg::ops::{self, Aspect, CompressCodec, Fit, Frame, GifOptions, VideoEncode};
 use mx_core::ffmpeg::probe;
 use mx_core::temp::TempFile;
-use mx_core::project::Project;
+use mx_core::project::{Clip, Project};
+use mx_core::timeline::{Range, head, tail};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
@@ -99,6 +101,51 @@ pub async fn export(app: AppHandle, task_id: String, req: ExportRequest) -> Resu
             duration,
             encoder: video.map(|v| v.encoder.name),
         })
+    })
+    .await
+}
+
+/// Seconds of each clip shown either side of a transition in its preview.
+const PREVIEW_LEAD: f64 = 1.5;
+
+/// A small render of the join into clip `index`: the end of the clip
+/// before, the transition, the start of this one. Rendered by the same
+/// code as the export, at 360p, so what plays is what the export does.
+#[tauri::command]
+pub async fn preview_transition(app: AppHandle, task_id: String, project: Project, index: usize) -> Result<String, String> {
+    let title = format!("Previewing the transition into clip {}", index + 1);
+    tasks::run(app, task_id, "preview", title, move |task| {
+        if index == 0 || index >= project.clips.len() {
+            bail!("there's no clip before clip {} to transition from", index + 1);
+        }
+        let (before, after) = (&project.clips[index - 1], &project.clips[index]);
+        let Some(transition) = after.transition else { bail!("clip {} has no transition in", index + 1) };
+        let kept = |c: &Clip| -> Result<Vec<Range>> {
+            if !c.keep.is_empty() {
+                return Ok(c.keep.clone());
+            }
+            let d = probe(&c.source)?.duration_secs().ok_or_else(|| anyhow!("couldn't read the duration of {}", c.source.display()))?;
+            Ok(vec![Range::new(0.0, d)])
+        };
+        let window = transition.duration + PREVIEW_LEAD;
+        let a = Clip { keep: tail(&kept(before)?, window), transition: None, ..before.clone() };
+        let b = Clip { keep: head(&kept(after)?, window), ..after.clone() };
+
+        let source = probe(&before.source)?;
+        let (w, h) = source.video().and_then(|v| v.width.zip(v.height)).ok_or_else(|| anyhow!("transitions need video"))?;
+        let frame = match project.frame {
+            Some(f) => Frame { short_edge: f.short_edge.min(360), ..f },
+            None => Frame { aspect: Aspect { w, h }, fit: Fit::Blur, short_edge: w.min(h).min(360) },
+        };
+        let preview = Project { clips: vec![a, b], frame: Some(frame), music: None, captions: project.captions.clone() };
+        std::fs::create_dir_all(cache::dir())?;
+        // A new name each time, so the web view doesn't replay a cached one.
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+        let output = cache::dir().join(format!("transition-{stamp}.mp4"));
+        let video = choose("h264", false, Some(frame.aspect.frame(frame.short_edge).1), None)?;
+        let render = ops::render_project(&preview, &[], &output, Some(video))?;
+        task.run_job("rendering the preview", render.job.clone())?;
+        Ok(output.display().to_string())
     })
     .await
 }

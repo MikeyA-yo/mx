@@ -42,6 +42,7 @@ fn main() {
             download::download,
             export::export,
             export::export_gif,
+            export::preview_transition,
             export::list_encoders,
             system::doctor,
             project::save_project,

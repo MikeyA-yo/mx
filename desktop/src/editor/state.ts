@@ -9,6 +9,7 @@ import type {
   EditPlan,
   Frame,
   Highlight,
+  Keyframe,
   MediaSummary,
   Music,
   Range,
@@ -51,6 +52,7 @@ export type ClipSpec = {
   titles: Title[];
   /** How it takes over from the clip before (set in the clip bar). */
   transition: Transition | null;
+  motion: Keyframe[];
   editor: ClipEditorState;
 };
 
@@ -102,6 +104,9 @@ export type EditorApi = {
   highlights: Highlight[] | null;
   setHighlights: (h: Highlight[] | null) => void;
 
+  motion: Keyframe[];
+  setMotion: (m: Keyframe[]) => void;
+
   skipCuts: boolean;
   setSkipCuts: (on: boolean) => void;
 
@@ -120,6 +125,22 @@ export function outputSize(frame: Frame | null, media: MediaSummary): [number, n
       : [even((short * frame.aspect.w) / frame.aspect.h), short];
   }
   return [media.width ?? 1920, media.height ?? 1080];
+}
+
+/** The view at source time `t` on a zoom/pan path: the renderer's half
+ * cosine easing between keyframes, held outside them. */
+export function motionAt(keys: Keyframe[], t: number): { zoom: number; x: number; y: number } {
+  if (keys.length === 0) return { zoom: 1, x: 0.5, y: 0.5 };
+  const k = [...keys].sort((a, b) => a.time - b.time);
+  if (t <= k[0].time) return k[0];
+  for (let i = 0; i + 1 < k.length; i++) {
+    const [a, b] = [k[i], k[i + 1]];
+    if (t < b.time) {
+      const e = 0.5 - 0.5 * Math.cos((Math.PI * (t - a.time)) / Math.max(1e-3, b.time - a.time));
+      return { zoom: a.zoom + (b.zoom - a.zoom) * e, x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e };
+    }
+  }
+  return k[k.length - 1];
 }
 
 /** Where source time `t` plays in the clip's output (cut time snaps to

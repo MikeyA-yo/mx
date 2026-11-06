@@ -16,7 +16,15 @@ export function outputExt(clips: ClipSpec[]): string {
 }
 
 function projectClip(spec: ClipSpec, keep: Range[] = spec.keep): ProjectClip {
-  return { source: spec.media.path, keep, volume: 1, titles: spec.titles, transcript: spec.transcript, transition: spec.transition };
+  return {
+    source: spec.media.path,
+    keep,
+    volume: 1,
+    titles: spec.titles,
+    transcript: spec.transcript,
+    transition: spec.transition,
+    motion: spec.motion,
+  };
 }
 
 /** The project as mx-core renders it. */

@@ -49,6 +49,22 @@ pub struct Clip {
     /// How this clip takes over from the one before it. `None` is a cut.
     #[serde(default)]
     pub transition: Option<Transition>,
+    /// Zoom and pan over time, eased between keyframes. Empty = still.
+    #[serde(default)]
+    pub motion: Vec<Keyframe>,
+}
+
+/// One point of a clip's zoom/pan path. Between keyframes the view eases
+/// (slow in, slow out); before the first and after the last it holds.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Keyframe {
+    /// In the clip's source time.
+    pub time: f64,
+    /// 1 shows the whole picture; 2 shows half its width.
+    pub zoom: f64,
+    /// Centre of the view, 0..1 across and down the picture.
+    pub x: f64,
+    pub y: f64,
 }
 
 fn one() -> f64 {
@@ -64,6 +80,7 @@ impl Clip {
             titles: Vec::new(),
             transcript: None,
             transition: None,
+            motion: Vec::new(),
         }
     }
 }

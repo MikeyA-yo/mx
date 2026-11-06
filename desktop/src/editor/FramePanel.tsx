@@ -1,4 +1,5 @@
 import type { Fit, Frame } from "../api";
+import MotionPanel from "./MotionPanel";
 import { outputSize, type EditorApi } from "./state";
 
 const ASPECTS: [string, number, number, string][] = [
@@ -99,6 +100,7 @@ export default function FramePanel({ ed }: { ed: EditorApi }) {
           </div>
         </>
       )}
+      <MotionPanel ed={ed} />
     </div>
   );
 }

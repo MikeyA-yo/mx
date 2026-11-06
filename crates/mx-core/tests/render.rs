@@ -225,3 +225,27 @@ fn transitions_overlap_clips_and_captions_follow() {
     assert!((vd - 6.5).abs() < 0.1, "video {vd}");
     assert!((ad - vd).abs() < 0.1, "audio {ad} vs video {vd}");
 }
+
+#[test]
+fn motion_zooms_along_keyframes_in_source_time() {
+    use mx_core::project::{Clip, Keyframe, Project};
+    if version("ffmpeg").is_none() {
+        return;
+    }
+    let dir = dir("motion");
+    let input = dir.join("in.mp4");
+    source(&input, &["-c:a", "aac"]);
+    // Keep 4-8 s (so the input is seeked to 4) and zoom in 2x from 5 s to 7 s.
+    let mut clip = Clip::new(&input);
+    clip.keep = vec![Range::new(4.0, 8.0)];
+    clip.motion = vec![Keyframe { time: 5.0, zoom: 1.0, x: 0.5, y: 0.5 }, Keyframe { time: 7.0, zoom: 2.0, x: 0.25, y: 0.25 }];
+    let project = Project { clips: vec![clip], ..Project::default() };
+    let output = dir.join("out.mp4");
+    let video = VideoEncode { encoder: Encoder::lookup("libx264").unwrap(), quality: None };
+    let job = mx_core::ffmpeg::ops::render_project(&project, &[], &output, Some(video)).unwrap();
+    job.job.clone().overwrite(true).run(&CancelToken::new(), |_| {}).unwrap();
+    let out = probe(&output).unwrap();
+    assert_eq!((out.video().unwrap().width, out.video().unwrap().height), (Some(320), Some(240)));
+    let (vd, ad) = durations(&output);
+    assert!((vd - 4.0).abs() < 0.1 && (ad - vd).abs() < 0.1, "video {vd}, audio {ad}");
+}

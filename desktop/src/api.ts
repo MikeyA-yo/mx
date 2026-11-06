@@ -164,6 +164,9 @@ export type TransitionKind = "fade" | "fadeblack" | "wipeleft" | "wiperight" | "
 /** How a clip takes over from the one before it. */
 export type Transition = { kind: TransitionKind; duration: number };
 
+/** A point on a clip's zoom/pan path, in its source time. */
+export type Keyframe = { time: number; zoom: number; x: number; y: number };
+
 /** One clip, as mx-core's renderer (and `mx render`) reads it. */
 export type ProjectClip = {
   source: string;
@@ -173,6 +176,7 @@ export type ProjectClip = {
   /** Source-timed, without the lines deleted in the editor. */
   transcript: Transcript | null;
   transition: Transition | null;
+  motion: Keyframe[];
 };
 
 export type Project = {
@@ -192,6 +196,9 @@ export type ExportRequest = {
   targetMb: number | null;
 };
 export const exportEdit = (taskId: string, req: ExportRequest) => invoke<Exported>("export", { taskId, req });
+/** Render the join into clip `index` at 360p; resolves to the file. */
+export const previewTransition = (taskId: string, project: Project, index: number) =>
+  invoke<string>("preview_transition", { taskId, project, index });
 
 export type GifRequest = { input: string; output: string; start: number; end: number; fps: number; width: number };
 export const exportGif = (taskId: string, req: GifRequest) => invoke<Exported>("export_gif", { taskId, req });

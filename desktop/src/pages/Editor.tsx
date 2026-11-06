@@ -11,6 +11,7 @@ import {
   newTaskId,
   planEdit,
   preparePreview,
+  previewTransition,
   probeMedia,
   saveProject,
   waveform,
@@ -19,6 +20,7 @@ import {
   type Filmstrip,
   type Frame,
   type Highlight,
+  type Keyframe,
   type MediaSummary,
   type Music,
   type Range,
@@ -40,8 +42,8 @@ import HighlightsPanel from "../editor/HighlightsPanel";
 import FramePanel from "../editor/FramePanel";
 import MusicPanel from "../editor/MusicPanel";
 import ExportPanel from "../editor/ExportPanel";
-import { projectFile, readProjectFile } from "../editor/exporting";
-import { outputSize, toOutput, type ClipEditorState, type ClipSpec, type EditorApi, type Pauses, type ProjectApi } from "../editor/state";
+import { coreProject, projectFile, readProjectFile } from "../editor/exporting";
+import { motionAt, outputSize, toOutput, type ClipEditorState, type ClipSpec, type EditorApi, type Pauses, type ProjectApi } from "../editor/state";
 
 const MEDIA_EXTENSIONS = ["mp4", "mkv", "mov", "webm", "m4v", "avi", "flv", "ts", "mp3", "m4a", "wav", "flac", "ogg", "opus", "aac"];
 
@@ -68,7 +70,8 @@ const overlapOf = (t: Transition | null, before: number, after: number) => {
 };
 
 /** A clip in the project; `initial` restores a saved editor. */
-type ClipEntry = { id: string; path: string; initial?: { editor: ClipEditorState; titles: Title[] } };
+type Saved = { editor: ClipEditorState; titles: Title[]; motion: Keyframe[] };
+type ClipEntry = { id: string; path: string; initial?: Saved };
 
 type Props = {
   /** Files to add, from elsewhere in the app; `n` makes repeats count. */
@@ -84,6 +87,8 @@ export default function EditorPage({ request, onOpen }: Props) {
   const [projectPath, setProjectPath] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  // The transition preview being made or shown.
+  const [preview, setPreview] = useState<{ task: string; index: number; src: string | null; error: string | null } | null>(null);
   const [active, setActive] = useState<string | null>(null);
   const [specs, setSpecs] = useState<Record<string, ClipSpec>>({});
   const [frame, setFrame] = useState<Frame | null>(null);
@@ -163,7 +168,7 @@ export default function EditorPage({ request, onOpen }: Props) {
       const entries = f.clips.map((c) => ({
         id: newTaskId(),
         path: c.source,
-        initial: { editor: c.editor, titles: c.titles ?? [] },
+        initial: { editor: c.editor, titles: c.titles ?? [], motion: c.motion ?? [] },
       }));
       setClips(entries);
       setSpecs({});
@@ -266,6 +271,25 @@ export default function EditorPage({ request, onOpen }: Props) {
               ))}
             </select>
           )}
+          {i > 0 && t && (
+            <button
+              className="btn small ghost"
+              title="Preview this transition"
+              disabled={!ready || preview?.src === null}
+              onClick={async () => {
+                const task = newTaskId();
+                setPreview({ task, index: i, src: null, error: null });
+                try {
+                  const src = await previewTransition(task, coreProject(project), i);
+                  setPreview((pv) => (pv?.task === task ? { ...pv, src: convertFileSrc(src) } : pv));
+                } catch (e) {
+                  setPreview((pv) => (pv?.task === task ? { ...pv, error: errorText(e) } : pv));
+                }
+              }}
+            >
+              ▶
+            </button>
+          )}
           <div className={`seq-clip${c.id === active ? " active" : ""}`} onClick={() => setActive(c.id)} title={c.path}>
             <span className="n">{i + 1}</span>
             <span className="ellipsis">{baseName(c.path)}</span>
@@ -323,6 +347,30 @@ export default function EditorPage({ request, onOpen }: Props) {
 
   return (
     <>
+      {preview && (
+        <div className="modal" onClick={() => setPreview(null)}>
+          <div className="card" onClick={(e) => e.stopPropagation()}>
+            <div className="row" style={{ marginBottom: 10 }}>
+              <strong className="grow">Transition into clip {preview.index + 1}</strong>
+              <button className="btn small ghost" onClick={() => setPreview(null)}>
+                Close
+              </button>
+            </div>
+            {preview.src ? (
+              <video src={preview.src} autoPlay loop controls />
+            ) : preview.error ? (
+              <p className="error">{preview.error}</p>
+            ) : (
+              <div style={{ width: 360 }}>
+                <TaskProgress id={preview.task} label="rendering the preview" />
+              </div>
+            )}
+            <p className="faint" style={{ margin: "8px 0 0" }}>
+              Rendered by the export's own filters, at 360p.
+            </p>
+          </div>
+        </div>
+      )}
       {clips.map((c) => (
         <div key={c.id} style={{ display: c.id === active ? "contents" : "none" }}>
           <Workspace
@@ -410,7 +458,7 @@ type WorkspaceProps = {
   sequence: React.ReactNode;
   /** Project file controls, for the top bar. */
   toolbar: React.ReactNode;
-  initial?: { editor: ClipEditorState; titles: Title[] };
+  initial?: Saved;
   onSpec: (spec: ClipSpec) => void;
   onEnded: () => void;
   onClose: () => void;
@@ -446,6 +494,7 @@ function Workspace(p: WorkspaceProps) {
   const [selectedTitle, setSelectedTitle] = useState<number | null>(null);
   const [highlights, setHighlights] = useState<Highlight[] | null>(saved?.highlights ?? null);
   const [skipCuts, setSkipCuts] = useState(saved?.skipCuts ?? true);
+  const [motion, setMotion] = useState<Keyframe[]>(p.initial?.motion ?? []);
   const [plan, setPlan] = useState<EditPlan>({ cuts: [], keep: [], outputDuration: 0 });
   const [cues, setCues] = useState<Segment[]>([]);
 
@@ -516,9 +565,10 @@ function Workspace(p: WorkspaceProps) {
         transcript: keptTranscript,
         titles,
         transition: null,
+        motion,
         editor: { pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts },
       },
-    [media, plan, keptTranscript, titles, p.id, pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts],
+    [media, plan, keptTranscript, titles, motion, p.id, pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts],
   );
   const onSpec = p.onSpec;
   useEffect(() => {
@@ -686,6 +736,8 @@ function Workspace(p: WorkspaceProps) {
           setSelectedTitle,
           highlights,
           setHighlights,
+          motion,
+          setMotion,
           skipCuts,
           setSkipCuts,
           project,
@@ -716,12 +768,22 @@ function Workspace(p: WorkspaceProps) {
     );
   }
 
+  // With no frame chosen, the output takes the first clip's shape and
+  // other clips are fitted into it with a blurred background: preview
+  // them that way too.
+  const first = project.clips[0]?.media ?? media;
+  const stageFrame: Frame | null =
+    project.frame ??
+    (first.width && first.height && media.width && media.height && first.width * media.height !== first.height * media.width
+      ? { aspect: { w: first.width, h: first.height }, fit: { kind: "blur" }, short_edge: Math.min(first.width, first.height) }
+      : null);
+
   const tabs: [Tab, string, boolean][] = [
     ["cut", "Cut", plan.cuts.length > 0],
     ["text", "Text", !!transcript],
     ["titles", "Titles", titles.length > 0],
     ["highlights", "Picks", !!highlights?.length],
-    ["frame", "Frame", !!project.frame],
+    ["frame", "Frame", !!project.frame || motion.length > 0],
     ["music", "Music", !!project.music],
     ["export", "Export", false],
   ];
@@ -757,7 +819,7 @@ function Workspace(p: WorkspaceProps) {
           <Stage
             src={src}
             media={media}
-            frame={project.frame}
+            frame={stageFrame}
             cues={cues}
             style={style}
             showCaptions={project.captionsOn}
@@ -771,6 +833,7 @@ function Workspace(p: WorkspaceProps) {
               setTab("titles");
             }}
             onMoveTitle={(i, x, y) => setTitles((all) => all.map((t, j) => (j === i ? { ...t, x, y } : t)))}
+            view={motionAt(motion, time)}
           />
         ) : (
           <div className="stage-view">
@@ -836,6 +899,7 @@ function Workspace(p: WorkspaceProps) {
           selection={selection}
           highlights={highlights ?? []}
           titles={titles}
+          keyframes={motion.map((k) => k.time)}
           zoom={zoom}
           onSeek={seek}
           onSelect={setSelection}

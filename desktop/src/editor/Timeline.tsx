@@ -17,6 +17,8 @@ type Props = {
   selection: Range | null;
   highlights: Highlight[];
   titles: Title[];
+  /** Zoom/pan keyframe times. */
+  keyframes: number[];
   zoom: number;
   onSeek: (t: number) => void;
   onSelect: (r: Range | null) => void;
@@ -170,6 +172,9 @@ export default function Timeline(p: Props) {
             >
               #{i + 1}
             </div>
+          ))}
+          {p.keyframes.map((t, i) => (
+            <div key={`k${i}`} className="mark-key" style={{ left: x(t) }} title={`Zoom/pan keyframe at ${clock(t, true)}`} />
           ))}
           {p.titles.map((t, i) => (
             <div

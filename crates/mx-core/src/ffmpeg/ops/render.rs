@@ -22,7 +22,7 @@ use super::jumpcut::{audio_chain, parse_rate, select_expr, snap};
 use super::reframe::{Fit, filtergraph};
 use super::{VideoEncode, aac, audio_codec, finish};
 use crate::ffmpeg::{Job, Probe, filter_path, probe};
-use crate::project::{Clip, Placement, Project, length, output_transcript, titles_ass};
+use crate::project::{Clip, Keyframe, Placement, Project, length, output_transcript, titles_ass};
 use crate::speech::{cues, to_ass};
 use crate::temp::TempFile;
 use crate::timeline::{Range, total};
@@ -99,6 +99,8 @@ struct ClipPlan {
     volume: f64,
     /// `xfade` transition from the clip before, and how long it overlaps.
     transition: Option<(&'static str, f64)>,
+    /// Zoom/pan filters, run first on the clip's picture.
+    motion: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -188,7 +190,7 @@ fn graph(plan: &Plan) -> Graph {
     for (i, c) in plan.clips.iter().enumerate() {
         let mut pads = String::new();
         if let Some((rate, fps)) = &plan.rate {
-            let mut filters = Vec::new();
+            let mut filters: Vec<String> = c.motion.iter().cloned().collect();
             match &c.cuts {
                 Some(cuts) => {
                     filters.push(format!("fps={rate}"));
@@ -300,6 +302,53 @@ fn graph(plan: &Plan) -> Graph {
     g
 }
 
+/// An ffmpeg expression for one keyframe value at time `t` (an
+/// expression too): eased with a half cosine between keyframes, held
+/// outside them. Keyframes must be sorted by time.
+fn eased(keys: &[Keyframe], value: impl Fn(&Keyframe) -> f64, t: &str) -> String {
+    let v = |k: &Keyframe| format!("{:.5}", value(k));
+    let mut expr = v(&keys[keys.len() - 1]);
+    for pair in keys.windows(2).rev() {
+        let (a, b) = (&pair[0], &pair[1]);
+        let span = (b.time - a.time).max(1e-3);
+        expr = format!(
+            "if(lt({t},{:.4}),{}+({}-{})*(0.5-0.5*cos(PI*({t}-{:.4})/{span:.4})),{expr})",
+            b.time,
+            v(a),
+            v(b),
+            v(a),
+            a.time
+        );
+    }
+    format!("if(lt({t},{:.4}),{},{expr})", keys[0].time, v(&keys[0]))
+}
+
+/// Filters that zoom and pan a `w`x`h` picture along `keys`, keeping its
+/// size: scale up by the zoom (re-evaluated every frame), then crop a
+/// `w`x`h` window centred on the keyframed point, held inside the
+/// picture. `seek` is where the input starts in source time, since
+/// keyframes are in source time and a seeked input's clock starts at 0.
+/// `None` when the path never zooms in.
+fn motion_filters(keys: &[Keyframe], (w, h): (u32, u32), seek: f64) -> Option<String> {
+    let mut keys: Vec<Keyframe> = keys
+        .iter()
+        .map(|k| Keyframe { time: k.time, zoom: k.zoom.clamp(1.0, 8.0), x: k.x.clamp(0.0, 1.0), y: k.y.clamp(0.0, 1.0) })
+        .collect();
+    keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+    if keys.iter().all(|k| k.zoom < 1.001) {
+        return None;
+    }
+    let t = format!("(t+{seek:.6})");
+    let z = eased(&keys, |k| k.zoom, &t);
+    let x = eased(&keys, |k| k.x, &t);
+    let y = eased(&keys, |k| k.y, &t);
+    let (w, h) = ((w / 2).max(1) * 2, (h / 2).max(1) * 2);
+    Some(format!(
+        "scale=w='trunc(iw*{z}/2)*2':h='trunc(ih*{z}/2)*2':eval=frame:flags=bicubic,\
+         crop={w}:{h}:x='max(0,min(iw-ow,iw*{x}-ow/2))':y='max(0,min(ih-oh,ih*{y}-oh/2))'"
+    ))
+}
+
 /// Render `edit` of `input` to `output`. `video` is required when the
 /// input has video.
 pub fn render(input: &Path, output: &Path, edit: &Edit, video: Option<VideoEncode>) -> Result<Render> {
@@ -382,6 +431,10 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
             duration: length,
             volume: clip.volume.max(0.0),
             transition: None,
+            motion: match (source.video().and_then(|v| v.width.zip(v.height)), clip.motion.is_empty()) {
+                (Some(size), false) => motion_filters(&clip.motion, size, seek),
+                _ => None,
+            },
         });
         keeps.push(kept);
     }
@@ -483,7 +536,7 @@ mod tests {
 
     fn clip(cuts: Option<Vec<Range>>, size: (u32, u32), audio: bool) -> ClipPlan {
         let duration = cuts.as_ref().map_or(10.0, |c| total(c));
-        ClipPlan { cuts, size: Some(size), audio, duration, volume: 1.0, transition: None }
+        ClipPlan { cuts, size: Some(size), audio, duration, volume: 1.0, transition: None, motion: None }
     }
 
     fn plan(clips: Vec<ClipPlan>) -> Plan {
@@ -576,6 +629,18 @@ mod tests {
         assert!(text.contains("[acat]asplit=2[amain][akey]"), "{text}");
         assert!(text.contains("[mus][akey]sidechaincompress"), "{text}");
         assert_eq!(s.audio.as_deref(), Some("[amix]"));
+    }
+
+    #[test]
+    fn motion_eases_between_keyframes_and_holds_outside_them() {
+        let k = |time, zoom| Keyframe { time, zoom, x: 0.5, y: 0.5 };
+        let e = eased(&[k(1.0, 1.0), k(3.0, 2.0)], |k| k.zoom, "T");
+        assert_eq!(e, "if(lt(T,1.0000),1.00000,if(lt(T,3.0000),1.00000+(2.00000-1.00000)*(0.5-0.5*cos(PI*(T-1.0000)/2.0000)),2.00000))");
+        let f = motion_filters(&[k(0.0, 1.0), k(2.0, 1.5)], (321, 240), 4.0).unwrap();
+        assert!(f.starts_with("scale=w='trunc(iw*if(lt((t+4.000000),0.0000)"), "{f}");
+        assert!(f.contains("eval=frame") && f.contains("crop=320:240:"), "{f}");
+        // Never zooming in is no motion at all.
+        assert!(motion_filters(&[k(0.0, 1.0), k(2.0, 0.5)], (320, 240), 0.0).is_none());
     }
 
     #[test]

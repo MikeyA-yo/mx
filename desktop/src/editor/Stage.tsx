@@ -21,6 +21,8 @@ type Props = {
   selectedTitle: number | null;
   onSelectTitle: (i: number | null) => void;
   onMoveTitle: (i: number, x: number, y: number) => void;
+  /** The zoom/pan view at the current time. */
+  view: { zoom: number; x: number; y: number };
 };
 
 /** The cue showing at `t`, by binary search (cues are in time order). */
@@ -92,6 +94,28 @@ export default function Stage(p: Props) {
     objectPosition = `${pos}% ${pos}%`;
   }
 
+  // Zoom and pan act on the source picture, before it's fitted into the
+  // frame, so they're clipped to where the picture sits: the whole box
+  // when it fills it, else the letterboxed picture inside it.
+  const contained = !p.frame || fit === "blur" || fit === "pad";
+  const fitsWidth = sourceAspect >= aspect;
+  const picW = contained ? (fitsWidth ? boxW : boxH * sourceAspect) : boxW;
+  const picH = contained ? (fitsWidth ? boxW / sourceAspect : boxH) : boxH;
+  const picture: React.CSSProperties = {
+    position: "absolute",
+    overflow: "hidden",
+    width: picW,
+    height: picH,
+    left: (boxW - picW) / 2,
+    top: (boxH - picH) / 2,
+  };
+  // The renderer's crop window: centred on (x, y), held inside the picture.
+  const z = Math.max(1, p.view.zoom);
+  const half = 0.5 / z;
+  const cx = Math.min(1 - half, Math.max(half, p.view.x));
+  const cy = Math.min(1 - half, Math.max(half, p.view.y));
+  const zoomTransform = z > 1.001 ? `translate(${-(cx - 0.5) * z * picW}px, ${-(cy - 0.5) * z * picH}px) scale(${z})` : undefined;
+
   const cue = p.showCaptions && p.style ? cueAt(p.cues, p.time) : -1;
   const fontSize = p.style ? p.style.size * Math.min(boxW, boxH) : 0;
   const shown = cue >= 0 ? p.cues[cue] : null;
@@ -106,13 +130,15 @@ export default function Stage(p: Props) {
     <div className="stage-view" ref={view}>
       <div className="frame-box" style={{ width: boxW, height: boxH }}>
         {fit === "blur" && <canvas ref={blur} width={96} height={Math.round(96 / aspect)} />}
-        <video
-          ref={p.videoRef}
-          src={p.src ?? undefined}
-          style={{ objectFit, objectPosition, visibility: p.media.hasVideo ? "visible" : "hidden" }}
-          preload="auto"
-          onLoadedMetadata={p.onLoaded}
-        />
+        <div className="picture" style={picture}>
+          <video
+            ref={p.videoRef}
+            src={p.src ?? undefined}
+            style={{ objectFit, objectPosition, visibility: p.media.hasVideo ? "visible" : "hidden", transform: zoomTransform }}
+            preload="auto"
+            onLoadedMetadata={p.onLoaded}
+          />
+        </div>
         {!p.media.hasVideo && (
           <div className="audio-only" style={{ position: "absolute", inset: 0 }}>
             <MusicIcon className="" />
