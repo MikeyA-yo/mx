@@ -126,7 +126,8 @@ export default function CutPanel({ ed }: { ed: EditorApi }) {
 
       <h3 className="section">Your cuts</h3>
       <p className="help">
-        Drag across the timeline to select, then press <kbd>X</kbd>. <kbd>I</kbd> and <kbd>O</kbd> set the start and end at the playhead.
+        Drag across the timeline to select (drag its edges to adjust), then press <kbd>X</kbd>. <kbd>I</kbd> and <kbd>O</kbd> set the start
+        and end at the playhead. Made a mistake? <kbd>Ctrl+Z</kbd> undoes it.
       </p>
       <button
         className="btn wide"
@@ -138,6 +139,24 @@ export default function CutPanel({ ed }: { ed: EditorApi }) {
       >
         Cut the selection {ed.selection ? `(${span(ed.selection.end - ed.selection.start)})` : ""}
       </button>
+      <div className="row" style={{ marginTop: 8 }}>
+        <button
+          className="btn small grow"
+          disabled={ed.time < 0.05}
+          title="Cut from the start up to the playhead (Q)"
+          onClick={() => ed.setManualCuts([...ed.manualCuts, { start: 0, end: ed.time }])}
+        >
+          Cut before playhead <kbd>Q</kbd>
+        </button>
+        <button
+          className="btn small grow"
+          disabled={ed.time > d - 0.05}
+          title="Cut from the playhead to the end (W)"
+          onClick={() => ed.setManualCuts([...ed.manualCuts, { start: ed.time, end: d }])}
+        >
+          Cut after playhead <kbd>W</kbd>
+        </button>
+      </div>
       <div style={{ marginTop: 10 }}>
         {ed.manualCuts.map((c, i) => (
           <div className="stat-row" key={i}>

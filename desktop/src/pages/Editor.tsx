@@ -33,7 +33,7 @@ import {
   type TransitionKind,
 } from "../api";
 import { TaskProgress } from "../components";
-import { BackIcon, PauseIcon, PlayIcon, ScissorsIcon } from "../icons";
+import { BackIcon, PauseIcon, PlayIcon, RedoIcon, ScissorsIcon, UndoIcon } from "../icons";
 import { offerTour, startTour } from "../tour";
 import { baseName, bytes, clock, dirName, join, load, stem, store } from "../util";
 import Stage from "../editor/Stage";
@@ -46,6 +46,8 @@ import FramePanel from "../editor/FramePanel";
 import AudioPanel from "../editor/AudioPanel";
 import ExportPanel from "../editor/ExportPanel";
 import QuickStart from "../editor/QuickStart";
+import { useHistory, type History } from "../editor/history";
+import { useLengths } from "../editor/lengths";
 import { coreProject, projectFile, readProjectFile } from "../editor/exporting";
 import {
   motionAt,
@@ -54,6 +56,8 @@ import {
   type ClipEditorState,
   type ClipSpec,
   type EditorApi,
+  type LayerBar,
+  type LayerRef,
   type Pauses,
   type PlacedOverlay,
   type PlacedSound,
@@ -116,15 +120,67 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   // clip can be asked twice.
   const [playNext, setPlayNext] = useState<{ id: string; n: number } | null>(null);
 
-  const add = useCallback((paths: string[]) => {
-    if (paths.length === 0) return;
-    const added = paths.map((path) => ({ id: newTaskId(), path }));
-    setClips((c) => [...c, ...added]);
-    setActive(added[0].id);
+  // Undo: each clip registers its setters by id, so a step can be put back
+  // even into a clip that was removed and has come back.
+  const clipSetters = useRef<Record<string, Record<string, (v: never) => void>>>({});
+  const register = useCallback((id: string, setters: Record<string, (v: never) => void>) => {
+    clipSetters.current[id] = setters;
+    return () => {
+      if (clipSetters.current[id] === setters) delete clipSetters.current[id];
+    };
   }, []);
+  // Each clip's state as last seen, to bring a removed clip back as it was.
+  const lastSaved = useRef<Record<string, Saved>>({});
+  useEffect(() => {
+    for (const s of Object.values(specs)) {
+      lastSaved.current[s.id] = { editor: s.editor, titles: s.titles, motion: s.motion, volume: s.volume, sounds: s.sounds, overlays: s.overlays };
+    }
+  }, [specs]);
+  const restoreClips = (list: ClipEntry[]) => {
+    setClips(list.map((c) => ({ ...c, initial: lastSaved.current[c.id] ?? c.initial })));
+    setSpecs((all) => Object.fromEntries(Object.entries(all).filter(([id]) => list.some((c) => c.id === id))));
+    setActive((a) => (list.some((c) => c.id === a) ? a : (list[0]?.id ?? null)));
+  };
+  const history = useHistory((scope, key, value) => {
+    if (scope !== "project") return clipSetters.current[scope]?.[key]?.(value as never);
+    const v = value as never;
+    if (key === "frame") setFrame(v);
+    else if (key === "music") setMusic(v);
+    else if (key === "style") setStyle(v);
+    else if (key === "captionsOn") setCaptionsOn(v);
+    else if (key === "transitions") setTransitions(v);
+    else if (key === "clips") restoreClips(v);
+  });
+  const { record } = history;
+  /** A project setter that can be undone. */
+  const tracked =
+    <T,>(key: string, value: T, set: (v: T) => void) =>
+    (next: T) => {
+      record([{ scope: "project", key, before: value, after: next }]);
+      set(next);
+    };
+
+  const handled = useRef(0);
+  const clipsRef = useRef(clips);
+  clipsRef.current = clips;
+  const add = useCallback(
+    (paths: string[]) => {
+      if (paths.length === 0) return;
+      const added = paths.map((path) => ({ id: newTaskId(), path }));
+      const next = [...clipsRef.current, ...added];
+      record([{ scope: "project", key: "clips", before: clipsRef.current, after: next }]);
+      clipsRef.current = next;
+      setClips(next);
+      setActive(added[0].id);
+    },
+    [record],
+  );
 
   useEffect(() => {
-    if (request) add(request.paths);
+    // Each request once, however often this runs.
+    if (!request || request.n === handled.current) return;
+    handled.current = request.n;
+    add(request.paths);
   }, [request, add]);
   useEffect(() => onClips(clips.length), [clips.length, onClips]);
 
@@ -141,7 +197,18 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     captionDefaults(outW, outH).then((d) => setStyle((s) => (s ? { ...s, position: d.position } : d)));
   }, [!!first, portrait]);
 
-  const project: ProjectApi = { clips: ordered, frame, setFrame, captionsOn, setCaptionsOn, style, setStyle, music, setMusic };
+  const project: ProjectApi = {
+    clips: ordered,
+    frame,
+    setFrame: tracked("frame", frame, setFrame),
+    captionsOn,
+    setCaptionsOn: tracked("captionsOn", captionsOn, setCaptionsOn),
+    style,
+    setStyle: tracked("style", style, setStyle),
+    music,
+    setMusic: tracked("music", music, setMusic),
+  };
+  const setTransitionsTracked = tracked("transitions", transitions, setTransitions);
 
   const close = async () => {
     if (dirty) {
@@ -160,6 +227,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     setCaptionsOn(false);
     setProjectPath(null);
     setSaved(null);
+    history.clear();
     clearAutosave();
   };
 
@@ -206,6 +274,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
       setProjectPath(path);
       setSaved(null);
       setFileError(null);
+      history.clear();
     } catch (e) {
       setFileError(errorText(e));
     }
@@ -219,12 +288,21 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     return () => clearTimeout(t);
   }, [json]);
 
-  // Ctrl+S saves, Ctrl+Shift+S saves as.
+  // Ctrl+S saves, Ctrl+Shift+S saves as. Ctrl+Z undoes, Ctrl+Shift+Z or
+  // Ctrl+Y redoes, except in a text box, which has its own.
   const saveKeys = useRef<(e: KeyboardEvent) => void>(() => {});
   saveKeys.current = (e: KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && clips.length) {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === "s" && clips.length) {
       e.preventDefault();
       saveTo(e.shiftKey ? null : projectPath);
+    } else if (k === "z" || k === "y") {
+      const target = e.target as HTMLInputElement;
+      if (target.tagName === "TEXTAREA" || (target.tagName === "INPUT" && !["range", "checkbox"].includes(target.type))) return;
+      e.preventDefault();
+      if (k === "y" || e.shiftKey) history.redo();
+      else history.undo();
     }
   };
   useEffect(() => {
@@ -235,6 +313,11 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   const remove = (id: string) => {
     const i = clips.findIndex((c) => c.id === id);
     const rest = clips.filter((c) => c.id !== id);
+    const { [id]: _, ...otherTransitions } = transitions;
+    record([
+      { scope: "project", key: "clips", before: clips, after: rest },
+      { scope: "project", key: "transitions", before: transitions, after: otherTransitions },
+    ]);
     setClips(rest);
     setSpecs(({ [id]: _, ...others }) => others);
     setTransitions(({ [id]: _, ...others }) => others);
@@ -246,6 +329,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     if (j < 0 || j >= clips.length) return;
     const next = [...clips];
     [next[i], next[j]] = [next[j], next[i]];
+    record([{ scope: "project", key: "clips", before: clips, after: next }]);
     setClips(next);
   };
   const onEnded = (id: string) => {
@@ -257,7 +341,11 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   };
   const onSpec = useCallback((spec: ClipSpec) => setSpecs((s) => ({ ...s, [spec.id]: spec })), []);
 
-  if (clips.length === 0) return <Empty onOpen={onOpen} onOpenProject={openFile} error={fileError} />;
+  if (clips.length === 0) {
+    // Removing the last clip can be undone from here too.
+    const undo = history.undoName === "clips" ? history.undo : null;
+    return <Empty onOpen={onOpen} onOpenProject={openFile} error={fileError} onUndo={undo} />;
+  }
 
   // Each clip's start on the output, overlapping by its transition.
   let offset = 0;
@@ -310,7 +398,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
               value={t?.kind ?? ""}
               onChange={(e) => {
                 const kind = e.target.value as TransitionKind | "";
-                setTransitions((all) => ({ ...all, [c.id]: kind ? { kind, duration: t?.duration ?? 0.6 } : null }));
+                setTransitionsTracked({ ...transitions, [c.id]: kind ? { kind, duration: t?.duration ?? 0.6 } : null });
               }}
             >
               {TRANSITIONS.map(([kind, label]) => (
@@ -376,6 +464,23 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
         {dirty ? " •" : ""}
       </span>
       {fileError && <span className="error ellipsis">{fileError}</span>}
+      <button
+        data-tour="undo"
+        className="btn small ghost icon-only"
+        onClick={history.undo}
+        disabled={!history.undoName}
+        title={history.undoName ? `Undo ${history.undoName} (Ctrl+Z)` : "Nothing to undo"}
+      >
+        <UndoIcon />
+      </button>
+      <button
+        className="btn small ghost icon-only"
+        onClick={history.redo}
+        disabled={!history.redoName}
+        title={history.redoName ? `Redo ${history.redoName} (Ctrl+Shift+Z)` : "Nothing to redo"}
+      >
+        <RedoIcon />
+      </button>
       <button className="btn small" onClick={() => saveTo(projectPath)} title="Save the project to edit later (Ctrl+S)" disabled={!ready} data-tour="save">
         Save
       </button>
@@ -434,6 +539,8 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
             sequence={sequence}
             toolbar={toolbar}
             initial={c.initial}
+            history={history}
+            register={register}
             onSpec={onSpec}
             onEnded={() => onEnded(c.id)}
             onClose={close}
@@ -444,7 +551,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   );
 }
 
-function Empty(p: { onOpen: (paths: string[]) => void; onOpenProject: (path: string | null) => void; error: string | null }) {
+function Empty(p: { onOpen: (paths: string[]) => void; onOpenProject: (path: string | null) => void; error: string | null; onUndo: (() => void) | null }) {
   const { onOpen } = p;
   const recent = load<string[]>("recent", []);
   const [autosave, setAutosave] = useState(false);
@@ -477,6 +584,13 @@ function Empty(p: { onOpen: (paths: string[]) => void; onOpenProject: (path: str
             <div>
               <button className="btn ghost" style={{ marginTop: 14 }} onClick={() => p.onOpenProject(null)}>
                 Restore last session
+              </button>
+            </div>
+          )}
+          {p.onUndo && (
+            <div>
+              <button className="btn ghost" style={{ marginTop: 14 }} onClick={p.onUndo}>
+                Undo removing the clip
               </button>
             </div>
           )}
@@ -537,6 +651,9 @@ type WorkspaceProps = {
   /** Project file controls, for the top bar. */
   toolbar: React.ReactNode;
   initial?: Saved;
+  /** The project's undo history, which this clip's edits go into. */
+  history: History;
+  register: (id: string, setters: Record<string, (v: never) => void>) => () => void;
   onSpec: (spec: ClipSpec) => void;
   onEnded: () => void;
   onClose: () => void;
@@ -569,7 +686,7 @@ function Workspace(p: WorkspaceProps) {
   const [transcript, setTranscript] = useState<Transcript | null>(saved?.transcript ?? null);
   const [removed, setRemoved] = useState<number[]>(saved?.removed ?? []);
   const [titles, setTitles] = useState<Title[]>(p.initial?.titles ?? []);
-  const [selectedTitle, setSelectedTitle] = useState<number | null>(null);
+  const [layer, setLayer] = useState<LayerRef | null>(null);
   const [highlights, setHighlights] = useState<Highlight[] | null>(saved?.highlights ?? null);
   const [skipCuts, setSkipCuts] = useState(saved?.skipCuts ?? true);
   const [motion, setMotion] = useState<Keyframe[]>(p.initial?.motion ?? []);
@@ -582,20 +699,97 @@ function Workspace(p: WorkspaceProps) {
   const [cues, setCues] = useState<Segment[]>([]);
   const [exported, setExported] = useState(false);
 
-  // Undo covers the edits made by hand: cuts, deleted lines and titles.
-  type Snapshot = { manualCuts: Range[]; removed: number[]; titles: Title[] };
-  const history = useRef<Snapshot[]>([]);
-  const remember = () => {
-    history.current.push({ manualCuts, removed, titles });
-    if (history.current.length > 100) history.current.shift();
+  // Edits go through these, which record them in the project's history;
+  // undoing puts values back through the plain setters registered here.
+  const { record } = p.history;
+  const track =
+    <T,>(key: string, value: T, set: (v: T) => void) =>
+    (next: T) => {
+      record([{ scope: p.id, key, before: value, after: next }]);
+      set(next);
+    };
+  const edit = {
+    manualCuts: track("manualCuts", manualCuts, setManualCuts),
+    removed: track("removed", removed, setRemoved),
+    titles: track("titles", titles, setTitles),
+    overlays: track("overlays", overlays, setOverlays),
+    sounds: track("sounds", sounds, setSounds),
+    motion: track("motion", motion, setMotion),
+    volume: track("volume", volume, setVolume),
+    removePauses: track("removePauses", removePauses, setRemovePauses),
+    padding: track("padding", padding, setPadding),
   };
-  const undo = () => {
-    const last = history.current.pop();
-    if (last) {
-      setManualCuts(last.manualCuts);
-      setRemoved(last.removed);
-      setTitles(last.titles);
+  const { register } = p;
+  useEffect(
+    () =>
+      register(p.id, {
+        manualCuts: setManualCuts,
+        removed: setRemoved,
+        titles: setTitles,
+        overlays: setOverlays,
+        sounds: setSounds,
+        motion: setMotion,
+        volume: setVolume,
+        removePauses: setRemovePauses,
+        padding: setPadding,
+      }),
+    [p.id, register],
+  );
+
+  // The layers on the timeline. A video or sound can't be stretched past
+  // its own file, so their lengths are probed.
+  const lengths = useLengths([...overlays.map((o) => o.source), ...sounds.map((s) => s.source)]);
+  const fileBar = (kind: "overlay" | "sound", index: number, l: Overlay | Sound): LayerBar => {
+    const fileLength = lengths.get(l.source) ?? l.offset + (l.duration ?? 3);
+    const length = l.duration ?? fileLength - l.offset;
+    return {
+      ref: { kind, index },
+      start: l.at,
+      end: l.at + length,
+      label: baseName(l.source),
+      earliest: l.at - l.offset,
+      latest: l.at - l.offset + fileLength,
+      bounded: false,
+    };
+  };
+  const layerBars: LayerBar[] = [
+    ...titles.map((t, index) => ({
+      ref: { kind: "title" as const, index },
+      start: t.start,
+      end: t.end,
+      label: t.text.trim() || "(empty text)",
+      earliest: 0,
+      latest: media?.duration ?? t.end,
+      bounded: true,
+    })),
+    ...overlays.map((o, i) => fileBar("overlay", i, o)),
+    ...sounds.map((s, i) => fileBar("sound", i, s)),
+  ];
+  // Dragged on the timeline: the middle moves it; the start edge trims
+  // the head, starting the file later; the end edge sets its length.
+  const moveLayer = (l: LayerRef, start: number, end: number, edge: "move" | "start" | "end") => {
+    if (l.kind === "title") {
+      edit.titles(titles.map((t, i) => (i === l.index ? { ...t, start, end } : t)));
+      return;
     }
+    const change = <T extends Overlay | Sound>(item: T): T =>
+      edge === "move"
+        ? { ...item, at: start }
+        : edge === "start"
+          ? { ...item, at: start, offset: Math.max(0, item.offset + start - item.at), duration: end - start }
+          : { ...item, duration: end - start };
+    if (l.kind === "overlay") edit.overlays(overlays.map((o, i) => (i === l.index ? change(o) : o)));
+    else edit.sounds(sounds.map((s, i) => (i === l.index ? change(s) : s)));
+  };
+  const deleteLayer = (l: LayerRef) => {
+    if (l.kind === "title") edit.titles(titles.filter((_, i) => i !== l.index));
+    else if (l.kind === "overlay") edit.overlays(overlays.filter((_, i) => i !== l.index));
+    else edit.sounds(sounds.filter((_, i) => i !== l.index));
+    setLayer(null);
+  };
+  const pickLayer = (l: LayerRef | null) => {
+    setLayer(l);
+    if (l) setTab(l.kind === "sound" ? "audio" : "titles");
   };
 
   // The editor's tour, the first time a video is ready to play.
@@ -830,14 +1024,15 @@ function Workspace(p: WorkspaceProps) {
     else if (k === "i") setSelection({ start: time, end: Math.max(time + 0.1, selection?.end ?? media.duration) });
     else if (k === "o") setSelection({ start: Math.min(selection?.start ?? 0, time - 0.1), end: time });
     else if ((k === "x" || k === "delete" || k === "backspace") && selection) {
-      remember();
-      setManualCuts([...manualCuts, selection]);
+      edit.manualCuts([...manualCuts, selection]);
       setSelection(null);
-    } else if (k === "escape") {
+    } else if ((k === "delete" || k === "backspace") && layer) deleteLayer(layer);
+    else if (k === "q" && time > 0.05) edit.manualCuts([...manualCuts, { start: 0, end: time }]);
+    else if (k === "w" && time < media.duration - 0.05) edit.manualCuts([...manualCuts, { start: time, end: media.duration }]);
+    else if (k === "escape") {
       setSelection(null);
-      setSelectedTitle(null);
-    } else if (k === "z" && (e.ctrlKey || e.metaKey)) undo();
-    else return;
+      setLayer(null);
+    } else return;
     e.preventDefault();
   };
   useEffect(() => {
@@ -858,38 +1053,31 @@ function Workspace(p: WorkspaceProps) {
           pauses,
           setPauses,
           removePauses,
-          setRemovePauses,
+          setRemovePauses: edit.removePauses,
           padding,
-          setPadding,
+          setPadding: edit.padding,
           manualCuts,
-          setManualCuts: (c: Range[]) => {
-            remember();
-            setManualCuts(c);
-          },
+          setManualCuts: edit.manualCuts,
           transcript,
           setTranscript,
           removed,
-          setRemoved: (r: number[]) => {
-            remember();
-            setRemoved(r);
-          },
+          setRemoved: edit.removed,
           titles,
-          setTitles: (t: Title[]) => {
-            remember();
-            setTitles(t);
-          },
-          selectedTitle,
-          setSelectedTitle,
+          setTitles: edit.titles,
+          layer,
+          setLayer,
+          selectedTitle: layer?.kind === "title" ? layer.index : null,
+          setSelectedTitle: (i: number | null) => setLayer(i === null ? null : { kind: "title", index: i }),
           highlights,
           setHighlights,
           motion,
-          setMotion,
+          setMotion: edit.motion,
           volume,
-          setVolume,
+          setVolume: edit.volume,
           sounds,
-          setSounds,
+          setSounds: edit.sounds,
           overlays,
-          setOverlays,
+          setOverlays: edit.overlays,
           skipCuts,
           setSkipCuts,
           project,
@@ -989,12 +1177,9 @@ function Workspace(p: WorkspaceProps) {
             videoRef={video}
             onLoaded={() => setTime(video.current?.currentTime ?? 0)}
             titles={titles}
-            selectedTitle={tab === "titles" ? selectedTitle : null}
-            onSelectTitle={(i) => {
-              setSelectedTitle(i);
-              setTab("titles");
-            }}
-            onMoveTitle={(i, x, y) => setTitles((all) => all.map((t, j) => (j === i ? { ...t, x, y } : t)))}
+            selectedTitle={tab === "titles" && layer?.kind === "title" ? layer.index : null}
+            onSelectTitle={(i) => pickLayer(i === null ? null : { kind: "title", index: i })}
+            onMoveTitle={(i, x, y) => edit.titles(titles.map((t, j) => (j === i ? { ...t, x, y } : t)))}
             view={motionAt(motion, time)}
             layers={p.placedOverlays}
             layerRefs={layerEls}
@@ -1080,17 +1265,16 @@ function Workspace(p: WorkspaceProps) {
             cuts={plan.cuts}
             selection={selection}
             highlights={highlights ?? []}
-            titles={titles}
             keyframes={motion.map((k) => k.time)}
-            sounds={sounds.map((s) => ({ start: s.at, end: s.at + (s.duration ?? 0) }))}
-            overlays={overlays.map((o) => ({ start: o.at, end: o.at + (o.duration ?? 0) }))}
+            layers={layerBars}
+            selectedLayer={layer}
             zoom={zoom}
+            onZoom={setZoom}
             onSeek={seek}
             onSelect={setSelection}
-            onPickTitle={(i) => {
-              setSelectedTitle(i);
-              setTab("titles");
-            }}
+            onPickLayer={pickLayer}
+            onMoveLayer={moveLayer}
+            onDragEnd={p.history.seal}
           />
         </div>
       </div>

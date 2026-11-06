@@ -83,8 +83,8 @@ const TOURS: Record<TourName, Step[]> = {
       title: "Timeline",
       body: (
         <>
-          Click to jump to a moment. Drag across it to select a part, then press <kbd>X</kbd> to cut it out. Red is what's cut; coloured bars are
-          text, videos and sounds you've added.
+          Click to jump to a moment. Drag across it to select a part, then press <kbd>X</kbd> to cut it out; red is what's cut. Below, the text,
+          videos and sounds you add: drag one to move it, or its edges to make it shorter or longer.
         </>
       ),
       place: ["above"],
@@ -149,6 +149,16 @@ const TOURS: Record<TourName, Step[]> = {
       body: "When it looks right, save the finished video here. You can aim for a file size too.",
       place: ["left", "below"],
       press: true,
+    },
+    {
+      target: "undo",
+      title: "Undo anything",
+      body: (
+        <>
+          Every edit can be undone with <kbd>Ctrl+Z</kbd>, and redone with <kbd>Ctrl+Shift+Z</kbd>. Hover the arrows to see what they'll change.
+        </>
+      ),
+      place: ["below", "left"],
     },
     {
       target: "save",
@@ -344,8 +354,14 @@ const SHORTCUTS: [string[], string][] = [
   [["I"], "Start a selection at the playhead"],
   [["O"], "End a selection at the playhead"],
   [["X"], "Cut the selection out (Delete works too)"],
+  [["Q"], "Cut everything before the playhead"],
+  [["W"], "Cut everything after the playhead"],
+  [["Delete"], "Delete the layer picked on the timeline"],
   [["Esc"], "Clear the selection"],
-  [["Ctrl", "Z"], "Undo a cut, a deleted line or a text change"],
+  [["Ctrl", "Z"], "Undo any edit"],
+  [["Ctrl", "Shift", "Z"], "Redo (Ctrl+Y works too)"],
+  [["Ctrl", "Wheel"], "Zoom the timeline at the pointer"],
+  [["Alt"], "Hold while dragging a layer to stop it snapping"],
   [["Ctrl", "S"], "Save the project"],
   [["Ctrl", "Shift", "S"], "Save it as a new file"],
   [["?"], "Show this list"],

@@ -6,13 +6,16 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { errorText, probeMedia, type Sound } from "../api";
 import { baseName, clock, dirName } from "../util";
 import MusicPanel from "./MusicPanel";
-import type { EditorApi } from "./state";
+import { rememberLength } from "./lengths";
+import { useOpenCard, type EditorApi } from "./state";
 
 const AUDIO = ["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "mp4", "mov", "webm", "mkv"];
 
 export default function AudioPanel({ ed }: { ed: EditorApi }) {
   const [lengths, setLengths] = useState<Record<string, number>>({});
-  const [selected, setSelected] = useState<number | null>(null);
+  const selected = ed.layer?.kind === "sound" ? ed.layer.index : null;
+  const setSelected = (index: number | null) => ed.setLayer(index === null ? null : { kind: "sound", index });
+  useOpenCard(selected === null ? null : `sound-${selected}`);
   const [error, setError] = useState<string | null>(null);
 
   // File lengths, for the sliders' ranges.
@@ -34,6 +37,7 @@ export default function AudioPanel({ ed }: { ed: EditorApi }) {
       if (!m.hasAudio) throw new Error(`${baseName(source)} has no sound`);
       setLengths((l) => ({ ...l, [source]: m.duration }));
       ed.setSounds([...ed.sounds, { source, at: ed.time, offset: 0, duration: m.duration, volume: 1, fade_in: 0, fade_out: 0.3 }]);
+      rememberLength(source, m.duration);
       setSelected(ed.sounds.length);
       setError(null);
     } catch (e) {
@@ -79,7 +83,7 @@ export default function AudioPanel({ ed }: { ed: EditorApi }) {
         const length = s.duration ?? fileLength - s.offset;
         const open = selected === i;
         return (
-          <div key={i} className="hl-item" style={{ marginTop: 8, cursor: "default", borderColor: open ? "var(--accent)" : undefined }}>
+          <div key={i} data-card={`sound-${i}`} className="hl-item" style={{ marginTop: 8, cursor: "default", borderColor: open ? "var(--accent)" : undefined }}>
             <div className="row" style={{ cursor: "pointer" }} onClick={() => setSelected(open ? null : i)}>
               <span className="grow ellipsis" title={s.source}>
                 ♪ {baseName(s.source)}

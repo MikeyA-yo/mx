@@ -5,13 +5,16 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { errorText, probeMedia, type Overlay } from "../api";
 import { baseName, clock, dirName } from "../util";
 import TitlesPanel from "./TitlesPanel";
-import type { EditorApi } from "./state";
+import { rememberLength } from "./lengths";
+import { useOpenCard, type EditorApi } from "./state";
 
 const VIDEO = ["mp4", "mov", "mkv", "webm", "m4v", "avi", "gif"];
 
 export default function OverlaysPanel({ ed }: { ed: EditorApi }) {
   const [lengths, setLengths] = useState<Record<string, number>>({});
-  const [selected, setSelected] = useState<number | null>(null);
+  const selected = ed.layer?.kind === "overlay" ? ed.layer.index : null;
+  const setSelected = (index: number | null) => ed.setLayer(index === null ? null : { kind: "overlay", index });
+  useOpenCard(selected === null ? null : `overlay-${selected}`);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -41,6 +44,7 @@ export default function OverlaysPanel({ ed }: { ed: EditorApi }) {
       setLengths((l) => ({ ...l, [source]: m.duration }));
       // Three seconds of b-roll is the usual cutaway; it's easy to stretch.
       ed.setOverlays([...ed.overlays, { source, at: ed.time, offset: 0, duration: Math.min(3, m.duration), pip: null, volume: 0, fade: 0.2 }]);
+      rememberLength(source, m.duration);
       setSelected(ed.overlays.length);
       setError(null);
     } catch (e) {
@@ -73,7 +77,7 @@ export default function OverlaysPanel({ ed }: { ed: EditorApi }) {
           </div>
         );
         return (
-          <div key={i} className="hl-item" style={{ marginTop: 8, cursor: "default", borderColor: isOpen ? "var(--accent)" : undefined }}>
+          <div key={i} data-card={`overlay-${i}`} className="hl-item" style={{ marginTop: 8, cursor: "default", borderColor: isOpen ? "var(--accent)" : undefined }}>
             <div className="row" style={{ cursor: "pointer" }} onClick={() => setSelected(isOpen ? null : i)}>
               <span className="grow ellipsis" title={o.source}>
                 ▣ {baseName(o.source)}

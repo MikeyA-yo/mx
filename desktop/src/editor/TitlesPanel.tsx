@@ -1,11 +1,12 @@
 import type { Title } from "../api";
 import { clock } from "../util";
-import type { EditorApi } from "./state";
+import { useOpenCard, type EditorApi } from "./state";
 
 const FONTS = ["Arial", "Impact", "Segoe UI", "Verdana", "Georgia", "Trebuchet MS", "Comic Sans MS"];
 const COLORS = ["#ffffff", "#ffd400", "#ff4d6d", "#4dd9ff", "#7cff6b", "#111111"];
 
 export default function TitlesPanel({ ed }: { ed: EditorApi }) {
+  useOpenCard(ed.selectedTitle === null ? null : `title-${ed.selectedTitle}`);
   if (!ed.media.hasVideo) return null;
   const titles = ed.titles;
   const update = (i: number, change: Partial<Title>) => ed.setTitles(titles.map((t, j) => (j === i ? { ...t, ...change } : t)));
@@ -29,7 +30,7 @@ export default function TitlesPanel({ ed }: { ed: EditorApi }) {
       {titles.map((t, i) => {
         const open = ed.selectedTitle === i;
         return (
-          <div key={i} className="hl-item" style={{ marginTop: 10, cursor: "default", borderColor: open ? "var(--accent)" : undefined }}>
+          <div key={i} data-card={`title-${i}`} className="hl-item" style={{ marginTop: 10, cursor: "default", borderColor: open ? "var(--accent)" : undefined }}>
             <div className="row" onClick={() => ed.setSelectedTitle(open ? null : i)} style={{ cursor: "pointer" }}>
               <strong className="grow ellipsis">{t.text || "(empty)"}</strong>
               <a

@@ -946,21 +946,6 @@ kbd {
 .tabs .dot {
   margin-left: 3px;
 }
-.mark-title {
-  position: absolute;
-  bottom: 2px;
-  height: 12px;
-  border-radius: 3px;
-  background: #f5b83d;
-  color: #1a1300;
-  font-size: 9.5px;
-  line-height: 12px;
-  padding: 0 4px;
-  overflow: hidden;
-  white-space: nowrap;
-  pointer-events: auto;
-  cursor: pointer;
-}
 .seq-transition {
   background: var(--bg);
   border: 1px dashed var(--line);
@@ -1009,15 +994,6 @@ kbd {
   border-radius: 6px;
   background: black;
 }
-.mark-sound {
-  position: absolute;
-  bottom: 16px;
-  height: 6px;
-  border-radius: 3px;
-  background: #3ccf91;
-  opacity: 0.9;
-  pointer-events: none;
-}
 .frame-box .layer {
   position: absolute;
   opacity: 0;
@@ -1042,15 +1018,6 @@ kbd {
   object-fit: cover;
   filter: blur(14px) brightness(0.9);
   transform: scale(1.1);
-}
-.mark-overlay {
-  position: absolute;
-  top: 2px;
-  height: 8px;
-  border-radius: 3px;
-  background: #4dd9ff;
-  opacity: 0.9;
-  pointer-events: none;
 }
 
 /* Guides */
@@ -1225,4 +1192,143 @@ ol.how strong {
 }
 a {
   color: #a48bff;
+}
+
+/* Layer lanes */
+
+.lanes {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.lane {
+  position: relative;
+  height: 20px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.lane-label {
+  position: sticky;
+  left: 0;
+  display: inline-block;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 20px;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+}
+.layer-bar {
+  --c: #f5b83d;
+  position: absolute;
+  top: 1px;
+  height: 18px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--c) 78%, transparent);
+  color: #12100a;
+  font-size: 10.5px;
+  line-height: 18px;
+  cursor: grab;
+  z-index: 1;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+.lane-overlay .layer-bar {
+  --c: #4dd9ff;
+}
+.lane-sound .layer-bar {
+  --c: #3ccf91;
+}
+.layer-bar:hover {
+  background: var(--c);
+}
+.layer-bar:active {
+  cursor: grabbing;
+}
+.layer-bar.on {
+  background: var(--c);
+  box-shadow:
+    0 0 0 2px var(--text),
+    0 0 0 3px rgba(0, 0, 0, 0.5);
+  z-index: 2;
+}
+.layer-bar.runs-on {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  -webkit-mask-image: linear-gradient(90deg, black calc(100% - 14px), rgba(0, 0, 0, 0.35));
+}
+.layer-name {
+  display: block;
+  padding: 0 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+}
+.grip.start {
+  left: 0;
+  border-radius: 4px 0 0 4px;
+}
+.grip.end {
+  right: 0;
+  border-radius: 0 4px 4px 0;
+}
+.layer-bar.on .grip,
+.layer-bar:hover .grip {
+  background: rgba(0, 0, 0, 0.28);
+}
+.drag-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  white-space: nowrap;
+  background: var(--text);
+  color: var(--bg);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.sel-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+.sel-grip.start {
+  left: -5px;
+}
+.sel-grip.end {
+  right: -5px;
+}
+.sel-grip::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 3px;
+  height: 18px;
+  margin-top: -9px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.btn.icon-only {
+  padding: 5px 7px;
+  display: inline-grid;
+  place-items: center;
+}
+.btn kbd {
+  margin-left: 4px;
 }

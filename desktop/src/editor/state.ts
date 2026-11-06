@@ -4,6 +4,7 @@
 // transcript, titles, all in that clip's source time); the frame, caption
 // style and music belong to the whole project.
 
+import { useEffect } from "react";
 import type {
   CaptionStyle,
   EditPlan,
@@ -63,6 +64,38 @@ export type ClipSpec = {
   editor: ClipEditorState;
 };
 
+/** A layer on a clip: a title, a video overlay or a sound, by index. */
+export type LayerKind = "title" | "overlay" | "sound";
+export type LayerRef = { kind: LayerKind; index: number };
+export const sameLayer = (a: LayerRef | null, b: LayerRef | null) => !!a && !!b && a.kind === b.kind && a.index === b.index;
+
+/** A layer as the timeline draws it, in the clip's source time. */
+export type LayerBar = {
+  ref: LayerRef;
+  start: number;
+  end: number;
+  label: string;
+  /** How early its start can be dragged: a file can't start before itself. */
+  earliest: number;
+  /** How late its end can be dragged: the end of the file, or the clip. */
+  latest: number;
+  /** Has to stay inside the clip (titles); sounds and videos can run on. */
+  bounded: boolean;
+};
+
+/** Scrolls a panel's card into view when it's picked, on the timeline
+ * or the preview. */
+export function useOpenCard(card: string | null) {
+  useEffect(() => {
+    if (!card) return;
+    const t = setTimeout(() => {
+      const el = Array.from(document.querySelectorAll<HTMLElement>(`[data-card="${card}"]`)).find((e) => e.getClientRects().length);
+      el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }, 30);
+    return () => clearTimeout(t);
+  }, [card]);
+}
+
 /** An overlay placed on the output, for previewing. */
 export type PlacedOverlay = { src: string; start: number; length: number; offset: number; pip: Pip | null; volume: number; fade: number };
 
@@ -110,7 +143,10 @@ export type EditorApi = {
 
   titles: Title[];
   setTitles: (t: Title[]) => void;
-  /** Index of the title being edited, if any. */
+  /** The layer picked on the timeline or in a panel. */
+  layer: LayerRef | null;
+  setLayer: (l: LayerRef | null) => void;
+  /** Index of the title being edited, if any (the layer, when it's a title). */
   selectedTitle: number | null;
   setSelectedTitle: (i: number | null) => void;
 
