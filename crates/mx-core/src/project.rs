@@ -55,6 +55,50 @@ pub struct Clip {
     /// Audio that starts at a moment of this clip: a voiceover, an effect.
     #[serde(default)]
     pub sounds: Vec<Sound>,
+    /// Video shown over the picture from a moment of this clip: b-roll
+    /// while the clip's voice carries on, or a picture-in-picture.
+    #[serde(default)]
+    pub overlays: Vec<Overlay>,
+}
+
+/// A video laid over the main picture, started at a moment of a clip and
+/// playing for its length, across later clips like a [`Sound`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Overlay {
+    pub source: PathBuf,
+    /// When it starts, in its clip's source time.
+    pub at: f64,
+    /// Where in the file to start, seconds.
+    #[serde(default)]
+    pub offset: f64,
+    /// How much to show; `None` plays to the file's end.
+    #[serde(default)]
+    pub duration: Option<f64>,
+    /// `None` covers the frame (fitted like the clips); `Some` shows it in
+    /// a box.
+    #[serde(default)]
+    pub pip: Option<Pip>,
+    /// Its own sound. 0 (the default) keeps it silent, so the voice
+    /// underneath carries on.
+    #[serde(default)]
+    pub volume: f64,
+    /// Fade in and out, seconds.
+    #[serde(default = "overlay_fade")]
+    pub fade: f64,
+}
+
+fn overlay_fade() -> f64 {
+    0.2
+}
+
+/// A picture-in-picture box.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Pip {
+    /// Centre, 0..1 across and down the frame.
+    pub x: f64,
+    pub y: f64,
+    /// Width as a fraction of the frame's.
+    pub size: f64,
 }
 
 /// A piece of audio started at a moment of a clip. It plays on from there
@@ -109,6 +153,7 @@ impl Clip {
             transition: None,
             motion: Vec::new(),
             sounds: Vec::new(),
+            overlays: Vec::new(),
         }
     }
 }

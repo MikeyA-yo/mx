@@ -205,9 +205,13 @@ session back if the window was closed without saving.
 - **Text**: transcribe, then edit the video by deleting lines from the
   transcript. Burn the rest in as styled captions; the preview shows them
   where and how they'll be drawn.
-- **Titles**: text on the picture (colour, font, size, an optional box),
-  dragged into place on the preview, from the playhead for as long as you
-  set.
+- **Layers**: video over the picture, started at a moment of a clip and
+  shown for as long as you set, across later clips: full-frame b-roll
+  (fitted like the clips) while the clip's voice carries on, or a
+  picture-in-picture box placed and sized on the frame. Muted unless you
+  turn its sound up, faded in and out. And text titles (colour, font,
+  size, an optional box), dragged into place on the preview. Captions and
+  titles draw over the video layers.
 - **Picks**: the liveliest stretches (highlights), marked on the
   timeline, exported as clips.
 - **Frame**: 9:16, 1:1, 4:5 or 16:9 with a blurred background, a crop
@@ -280,6 +284,6 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 1. **Adaptive streaming**: encode a 1080/720/480/240 ladder with aligned keyframes, package as HLS/DASH.
 2. **Auto-highlights**: done for activity (loudness, motion, cuts); next, transcript-aware picks.
 3. **Subtitles**: done (Whisper → SRT/VTT, styled burn-in, editing by transcript); next, word-level timing.
-4. **Desktop editor**: clips, titles, music, sounds and clip volume, transitions (with previews), zoom & pan, saved projects and word highlighting done; next, overlay clips (b-roll over a voice), beat-synced cuts, stickers, speed ramps.
+4. **Desktop editor**: clips, video layers (b-roll, picture-in-picture), titles, music, sounds and clip volume, transitions (with previews), zoom & pan, saved projects and word highlighting done; next, beat-synced cuts, stickers and images, speed ramps.
 5. **Live recorder**: watch a channel, record when it goes live, handle stream drops.
 6. **Enhancement**: Real-ESRGAN upscaling, RIFE interpolation, Demucs stem separation.

@@ -12,6 +12,8 @@ import type {
   Keyframe,
   MediaSummary,
   Music,
+  Overlay,
+  Pip,
   Range,
   SilenceReport,
   Sound,
@@ -57,8 +59,12 @@ export type ClipSpec = {
   /** The clip's own sound level: 0 mutes, 1 as recorded. */
   volume: number;
   sounds: Sound[];
+  overlays: Overlay[];
   editor: ClipEditorState;
 };
+
+/** An overlay placed on the output, for previewing. */
+export type PlacedOverlay = { src: string; start: number; length: number; offset: number; pip: Pip | null; volume: number; fade: number };
 
 /** A sound placed on the output, for previewing. */
 export type PlacedSound = { src: string; start: number; length: number; offset: number; volume: number; fadeIn: number; fadeOut: number };
@@ -118,6 +124,8 @@ export type EditorApi = {
   setVolume: (v: number) => void;
   sounds: Sound[];
   setSounds: (s: Sound[]) => void;
+  overlays: Overlay[];
+  setOverlays: (o: Overlay[]) => void;
 
   skipCuts: boolean;
   setSkipCuts: (on: boolean) => void;

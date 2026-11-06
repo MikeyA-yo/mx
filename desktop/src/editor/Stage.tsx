@@ -4,7 +4,9 @@
 // and timing; the export is exact.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { CaptionStyle, Frame, MediaSummary, Segment, Title } from "../api";
+import type { PlacedOverlay } from "./state";
 import { MusicIcon } from "../icons";
 
 type Props = {
@@ -23,6 +25,10 @@ type Props = {
   onMoveTitle: (i: number, x: number, y: number) => void;
   /** The zoom/pan view at the current time. */
   view: { zoom: number; x: number; y: number };
+  /** The project's video overlays; the editor's clock shows, hides and
+   * syncs the elements through `layerRefs`. */
+  layers: PlacedOverlay[];
+  layerRefs: React.RefObject<(HTMLDivElement | null)[]>;
 };
 
 /** The cue showing at `t`, by binary search (cues are in time order). */
@@ -145,6 +151,29 @@ export default function Stage(p: Props) {
             <span>Audio only</span>
           </div>
         )}
+        {p.layers.map((o, k) => {
+          // A full-frame overlay is fitted like the clips: over a blurred
+          // copy of itself (also with no frame chosen), over black bars,
+          // or cropped to fill.
+          const fit = p.frame?.fit.kind ?? "blur";
+          const src = convertFileSrc(o.src);
+          const full = !o.pip;
+          return (
+            <div
+              key={`${k}-${o.src}`}
+              ref={(el) => void (p.layerRefs.current[k] = el)}
+              className={`layer${full ? " full" : " pip"}`}
+              style={
+                full
+                  ? { background: fit === "blur" ? undefined : "black" }
+                  : { left: o.pip!.x * boxW, top: o.pip!.y * boxH, width: o.pip!.size * boxW }
+              }
+            >
+              {full && fit === "blur" && <video className="layer-bg" src={src} preload="auto" muted />}
+              <video src={src} preload="auto" muted={o.volume === 0} style={full ? { objectFit: fit === "crop" ? "cover" : "contain" } : undefined} />
+            </div>
+          );
+        })}
         {p.titles.map((t, i) => {
           const showing = p.time >= t.start && p.time < t.end;
           const selected = p.selectedTitle === i;

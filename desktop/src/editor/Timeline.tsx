@@ -21,6 +21,8 @@ type Props = {
   keyframes: number[];
   /** Sounds started on this clip, in its source time. */
   sounds: Range[];
+  /** Video overlays started on this clip, in its source time. */
+  overlays: Range[];
   zoom: number;
   onSeek: (t: number) => void;
   onSelect: (r: Range | null) => void;
@@ -174,6 +176,13 @@ export default function Timeline(p: Props) {
             >
               #{i + 1}
             </div>
+          ))}
+          {p.overlays.map((s, i) => (
+            <div
+              key={`o${i}`}
+              className="mark-overlay"
+              style={{ left: x(s.start), width: Math.max(6, Math.min(width - x(s.start), x(s.end - s.start))) }}
+            />
           ))}
           {p.sounds.map((s, i) => (
             <div

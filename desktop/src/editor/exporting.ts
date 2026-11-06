@@ -25,6 +25,7 @@ function projectClip(spec: ClipSpec, keep: Range[] = spec.keep): ProjectClip {
     transition: spec.transition,
     motion: spec.motion,
     sounds: spec.sounds,
+    overlays: spec.overlays,
   };
 }
 

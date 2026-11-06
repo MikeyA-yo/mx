@@ -180,6 +180,23 @@ export type Sound = {
   fade_out: number;
 };
 
+/** A picture-in-picture box: centre and width, as fractions of the frame. */
+export type Pip = { x: number; y: number; size: number };
+
+/** Video laid over the picture from a moment of a clip (its source
+ * time), playing for its length across later clips. */
+export type Overlay = {
+  source: string;
+  at: number;
+  offset: number;
+  duration: number | null;
+  /** null covers the frame. */
+  pip: Pip | null;
+  /** Its own sound; 0 keeps it silent. */
+  volume: number;
+  fade: number;
+};
+
 /** One clip, as mx-core's renderer (and `mx render`) reads it. */
 export type ProjectClip = {
   source: string;
@@ -191,6 +208,7 @@ export type ProjectClip = {
   transition: Transition | null;
   motion: Keyframe[];
   sounds: Sound[];
+  overlays: Overlay[];
 };
 
 export type Project = {

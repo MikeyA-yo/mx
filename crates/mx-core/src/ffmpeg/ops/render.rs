@@ -111,6 +111,18 @@ struct MusicPlan {
     fade_out: f64,
 }
 
+/// An overlay, already trimmed by its input options.
+#[derive(Debug, Clone)]
+struct OverlayPlan {
+    input: usize,
+    /// Output time it starts at.
+    start: f64,
+    length: f64,
+    fade: f64,
+    /// Box width in pixels and centre (0..1), or `None` to cover the frame.
+    pip: Option<(u32, f64, f64)>,
+}
+
 /// A sound, already trimmed by its input options.
 #[derive(Debug, Clone)]
 struct SoundPlan {
@@ -139,6 +151,7 @@ struct Plan {
     subtitles: Vec<String>,
     music: Option<MusicPlan>,
     sounds: Vec<SoundPlan>,
+    overlays: Vec<OverlayPlan>,
 }
 
 /// The filter graph pieces, and the pads to map.
@@ -197,7 +210,7 @@ fn join_with_transitions(g: &mut Graph, plan: &Plan, has_video: bool, any_audio:
 fn graph(plan: &Plan) -> Graph {
     let mut g = Graph::default();
     // One clip, no music: pass streams through untouched where possible.
-    let single = plan.clips.len() == 1 && plan.music.is_none() && plan.sounds.is_empty();
+    let single = plan.clips.len() == 1 && plan.music.is_none() && plan.sounds.is_empty() && plan.overlays.is_empty();
     // Sounds are mixed into the clips' audio, so silent clips still need
     // a track for them to be mixed into.
     let any_audio = plan.clips.iter().any(|c| c.audio) || !plan.sounds.is_empty();
@@ -278,6 +291,35 @@ fn graph(plan: &Plan) -> Graph {
     } else {
         join_with_transitions(&mut g, plan, has_video, any_audio)
     };
+
+    // Overlays over the joined picture, under captions and titles. Each
+    // is brought to the frame rate and frame (or box), faded through its
+    // alpha, and shifted to its start; `overlay` shows it while it has
+    // frames and passes the picture through before and after.
+    if let (Some(v), Some((rate, _))) = (&mut video, &plan.rate) {
+        let (w, h) = plan.size;
+        for (k, o) in plan.overlays.iter().enumerate() {
+            g.parts.push(format!("[{}:v:0]fps={rate},setpts=PTS-STARTPTS[ovs{k}]", o.input));
+            let (x, y) = match o.pip {
+                None => {
+                    g.parts.push(filtergraph(&format!("ovs{k}"), &format!("ovf{k}"), plan.fit, w, h));
+                    ("0".to_string(), "0".to_string())
+                }
+                Some((pw, cx, cy)) => {
+                    g.parts.push(format!("[ovs{k}]scale={pw}:-2,setsar=1[ovf{k}]"));
+                    (format!("W*{cx:.4}-w/2"), format!("H*{cy:.4}-h/2"))
+                }
+            };
+            let fade_out = (o.length - o.fade).max(0.0);
+            g.parts.push(format!(
+                "[ovf{k}]format=yuva420p,fade=t=in:d={:.3}:alpha=1,fade=t=out:st={fade_out:.6}:d={:.3}:alpha=1,\
+                 setpts=PTS+{:.6}/TB[ov{k}]",
+                o.fade, o.fade, o.start
+            ));
+            g.parts.push(format!("[{v}][ov{k}]overlay=x={x}:y={y}:eof_action=pass:repeatlast=0[vo{k}]"));
+            *v = format!("vo{k}");
+        }
+    }
 
     if let Some(v) = &mut video {
         for (k, subs) in plan.subtitles.iter().enumerate() {
@@ -518,37 +560,66 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
         None => None,
     };
 
-    // Sounds: each trimmed by input options, then placed at its clip's
-    // moment. One that would outlast the video is cut at its end.
+    // Sounds and overlays: each trimmed by input options, then placed at
+    // its clip's moment. One that would outlast the video is cut at its
+    // end.
+    let mut next_input = project.clips.len() + usize::from(music.is_some());
+    let mut add_input = |job: Job, source: &Path, offset: f64, length: f64| {
+        let job = if offset > 0.0 { job.args(["-ss", &format!("{offset:.6}")]) } else { job };
+        next_input += 1;
+        (job.args(["-t", &format!("{length:.6}")]).input(source), next_input - 1)
+    };
+    let length_of = |source: &Path, offset: f64, wanted: Option<f64>, start: f64| -> Result<f64> {
+        let available = match wanted {
+            Some(d) => d,
+            None => probe(source)?.duration_secs().ok_or_else(|| anyhow!("couldn't read the duration of {}", source.display()))? - offset,
+        };
+        Ok(available.min(duration - start))
+    };
     let mut sounds = Vec::new();
     for (clip, place) in project.clips.iter().zip(&layout) {
         for s in &clip.sounds {
             let start = place.at(s.at);
-            let available = match s.duration {
-                Some(d) => d,
-                None => {
-                    let d = probe(&s.source)?
-                        .duration_secs()
-                        .ok_or_else(|| anyhow!("couldn't read the duration of {}", s.source.display()))?;
-                    d - s.offset
-                }
-            };
-            let length = available.min(duration - start);
+            let length = length_of(&s.source, s.offset, s.duration, start)?;
             if length < 0.05 {
                 continue;
             }
-            if s.offset > 0.0 {
-                job = job.args(["-ss", &format!("{:.6}", s.offset)]);
-            }
-            job = job.args(["-t", &format!("{length:.6}")]).input(&s.source);
+            let input;
+            (job, input) = add_input(job, &s.source, s.offset, length);
             sounds.push(SoundPlan {
-                input: project.clips.len() + usize::from(music.is_some()) + sounds.len(),
+                input,
                 start,
                 length,
                 volume: s.volume.max(0.0),
                 fade_in: s.fade_in.clamp(0.0, length / 2.0),
                 fade_out: s.fade_out.clamp(0.0, length / 2.0),
             });
+        }
+    }
+    let mut layers = Vec::new();
+    for (clip, place) in project.clips.iter().zip(&layout) {
+        for o in &clip.overlays {
+            if !has_video {
+                bail!("overlays need a video to go over");
+            }
+            let source = probe(&o.source)?;
+            if source.video().is_none() {
+                bail!("{} has no video to overlay", o.source.display());
+            }
+            let start = place.at(o.at);
+            let length = length_of(&o.source, o.offset, o.duration, start)?;
+            if length < 0.05 {
+                continue;
+            }
+            let input;
+            (job, input) = add_input(job, &o.source, o.offset, length);
+            let fade = o.fade.clamp(0.0, length / 2.0);
+            let pip = o.pip.map(|p| ((((p.size.clamp(0.05, 1.0) * size.0 as f64) / 2.0).round() as u32).max(1) * 2, p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0)));
+            layers.push(OverlayPlan { input, start, length, fade, pip });
+            // Its own sound, when it's turned up, mixes in like a sound.
+            if o.volume > 0.0 && source.has_audio() {
+                sounds.push(SoundPlan { input, start, length, volume: o.volume, fade_in: fade, fade_out: fade });
+            }
         }
     }
 
@@ -558,7 +629,7 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
         .chain(overlays.iter().map(TempFile::path))
         .map(filter_path)
         .collect::<Result<Vec<_>>>()?;
-    let plan = Plan { clips, rate, size, fit, reframe: project.frame.is_some(), subtitles, music, sounds };
+    let plan = Plan { clips, rate, size, fit, reframe: project.frame.is_some(), subtitles, music, sounds, overlays: layers };
     let g = graph(&plan);
 
     // Hundreds of ranges overflow Windows' 32k command-line limit, so the
@@ -620,6 +691,7 @@ mod tests {
             subtitles: vec![],
             music: None,
             sounds: vec![],
+            overlays: vec![],
         }
     }
 
@@ -727,6 +799,26 @@ mod tests {
         assert!(s.contains("afade=t=out:st=3.000000:d=1.000,adelay=delays=3250:all=1[snd0]"), "{s}");
         assert!(s.contains("[acat][snd0]amix=inputs=2:duration=first:normalize=0[asnd]"), "{s}");
         assert_eq!(g.audio.as_deref(), Some("[asnd]"));
+    }
+
+    #[test]
+    fn overlays_are_fitted_faded_shifted_and_drawn_under_the_text() {
+        let mut p = plan(vec![clip(None, (320, 240), true)]);
+        p.subtitles = vec!["'c.ass'".into()];
+        p.overlays = vec![
+            OverlayPlan { input: 1, start: 2.5, length: 3.0, fade: 0.2, pip: None },
+            OverlayPlan { input: 2, start: 4.0, length: 2.0, fade: 0.0, pip: Some((96, 0.75, 0.25)) },
+        ];
+        let g = graph(&p);
+        let s = g.parts.join(";\n");
+        assert!(s.contains("[1:v:0]fps=25/1,setpts=PTS-STARTPTS[ovs0]"), "{s}");
+        assert!(s.contains("[ovs0]split=2[bg][fg]"), "{s}");
+        assert!(s.contains("[ovf0]format=yuva420p,fade=t=in:d=0.200:alpha=1,fade=t=out:st=2.800000:d=0.200:alpha=1,setpts=PTS+2.500000/TB[ov0]"), "{s}");
+        assert!(s.contains("[ovs1]scale=96:-2,setsar=1[ovf1]"), "{s}");
+        assert!(s.contains("[vo0][ov1]overlay=x=W*0.7500-w/2:y=H*0.2500-h/2:eof_action=pass:repeatlast=0[vo1]"), "{s}");
+        // Captions go on top of the overlays.
+        assert!(s.contains("[vo1]subtitles=filename='c.ass'[vs0]"), "{s}");
+        assert_eq!(g.video.as_deref(), Some("[vs0]"));
     }
 
     #[test]

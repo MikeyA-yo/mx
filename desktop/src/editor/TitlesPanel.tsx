@@ -6,13 +6,7 @@ const FONTS = ["Arial", "Impact", "Segoe UI", "Verdana", "Georgia", "Trebuchet M
 const COLORS = ["#ffffff", "#ffd400", "#ff4d6d", "#4dd9ff", "#7cff6b", "#111111"];
 
 export default function TitlesPanel({ ed }: { ed: EditorApi }) {
-  if (!ed.media.hasVideo) {
-    return (
-      <div className="panel">
-        <p className="faint">This clip is audio only.</p>
-      </div>
-    );
-  }
+  if (!ed.media.hasVideo) return null;
   const titles = ed.titles;
   const update = (i: number, change: Partial<Title>) => ed.setTitles(titles.map((t, j) => (j === i ? { ...t, ...change } : t)));
   const add = () => {
@@ -25,8 +19,9 @@ export default function TitlesPanel({ ed }: { ed: EditorApi }) {
   };
 
   return (
-    <div className="panel">
-      <p className="help">Text on the picture: a hook, a label, a call to action. Drag it on the preview to place it.</p>
+    <div>
+      <h3 className="section">Text</h3>
+      <p className="help">A hook, a label, a call to action. Drag it on the preview to place it.</p>
       <button className="btn primary wide" onClick={add}>
         Add text at {clock(ed.time)}
       </button>

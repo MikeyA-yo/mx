@@ -306,3 +306,34 @@ fn sounds_play_over_muted_and_silent_clips_across_the_join() {
     assert!(level(&output, 10.5, 12.5) > -30.0, "{}", level(&output, 10.5, 12.5));
     assert!(level(&output, 13.3, 13.9) < -60.0, "{}", level(&output, 13.3, 13.9));
 }
+
+#[test]
+fn overlays_cover_or_box_the_picture_while_the_voice_carries_on() {
+    use mx_core::project::{Clip, Overlay, Pip, Project};
+    if version("ffmpeg").is_none() {
+        return;
+    }
+    let dir = dir("overlays");
+    let main = dir.join("main.mp4");
+    source(&main, &["-c:a", "aac"]);
+    let broll = dir.join("broll.mp4");
+    Job::new(&broll)
+        .args(["-f", "lavfi", "-i", "smptebars=duration=6:size=640x360:rate=25", "-c:v", "libx264", "-preset", "ultrafast"])
+        .overwrite(true)
+        .run(&CancelToken::new(), |_| {})
+        .unwrap();
+
+    let mut clip = Clip::new(&main);
+    let over = |at: f64, duration: f64, pip: Option<Pip>| Overlay { source: broll.clone(), at, offset: 1.0, duration: Some(duration), pip, volume: 0.0, fade: 0.0 };
+    clip.overlays = vec![over(2.0, 3.0, None), over(6.0, 2.0, Some(Pip { x: 0.75, y: 0.75, size: 0.4 }))];
+    let project = Project { clips: vec![clip], ..Project::default() };
+    let output = dir.join("out.mp4");
+    let video = VideoEncode { encoder: Encoder::lookup("libx264").unwrap(), quality: None };
+    let job = mx_core::ffmpeg::ops::render_project(&project, &[], &output, Some(video)).unwrap();
+    job.job.clone().overwrite(true).run(&CancelToken::new(), |_| {}).unwrap();
+
+    let (vd, ad) = durations(&output);
+    assert!((vd - 10.0).abs() < 0.1 && (ad - vd).abs() < 0.1, "video {vd}, audio {ad}");
+    // The main clip's tone plays straight through the cutaway.
+    assert!(level(&output, 2.5, 4.5) > -30.0, "{}", level(&output, 2.5, 4.5));
+}
