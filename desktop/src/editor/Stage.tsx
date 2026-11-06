@@ -94,7 +94,13 @@ export default function Stage(p: Props) {
 
   const cue = p.showCaptions && p.style ? cueAt(p.cues, p.time) : -1;
   const fontSize = p.style ? p.style.size * Math.min(boxW, boxH) : 0;
-  const text = cue >= 0 ? (p.style!.uppercase ? p.cues[cue].text.toUpperCase() : p.cues[cue].text) : "";
+  const shown = cue >= 0 ? p.cues[cue] : null;
+  const upper = (s: string) => (p.style!.uppercase ? s.toUpperCase() : s);
+  const text = shown ? upper(shown.text) : "";
+  // Karaoke: the word being said, by the same rule as the burn-in (each
+  // word lasts until the next one starts).
+  const words = shown?.words ?? [];
+  const spoken = p.style?.highlight ? words.findIndex((w, i) => p.time >= w.start && p.time < (words[i + 1]?.start ?? shown!.end)) : -1;
 
   return (
     <div className="stage-view" ref={view}>
@@ -169,7 +175,14 @@ export default function Stage(p: Props) {
               animation: p.style!.pop ? "pop 90ms ease-out" : undefined,
             }}
           >
-            {text}
+            {spoken >= 0
+              ? words.map((w, i) => (
+                  <span key={i} style={i === spoken ? { color: p.style!.highlight! } : undefined}>
+                    {i > 0 ? " " : ""}
+                    {upper(w.text)}
+                  </span>
+                ))
+              : text}
           </div>
         )}
       </div>

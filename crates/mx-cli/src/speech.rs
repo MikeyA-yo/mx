@@ -42,7 +42,7 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
             );
             Ok(())
         }
-        Command::Captions { input, output, subs, save_srt, words, size, position, font, upper, no_pop, speech, encode } => {
+        Command::Captions { input, output, subs, save_srt, words, size, position, font, upper, no_pop, highlight, speech, encode } => {
             check_output(&output, ctx)?;
             let source = ffmpeg::probe(&input)?;
             let v = source.video().ok_or_else(|| anyhow!("{} has no video to caption", input.display()))?;
@@ -72,6 +72,7 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
                 font,
                 uppercase: upper,
                 pop: !no_pop,
+                highlight,
                 ..defaults
             };
             let cues = speech::cues(&transcript, &style);

@@ -7,6 +7,7 @@
 mod download;
 mod export;
 mod media;
+mod project;
 mod speech;
 mod system;
 mod tasks;
@@ -43,6 +44,9 @@ fn main() {
             export::export_gif,
             export::list_encoders,
             system::doctor,
+            project::save_project,
+            project::load_project,
+            project::clear_autosave,
             system::startup_files,
         ])
         .run(tauri::generate_context!())

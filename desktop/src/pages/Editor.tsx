@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   captionCues,
   captionDefaults,
+  clearAutosave,
   errorText,
   filmstrip,
+  loadProject,
   newTaskId,
   planEdit,
   preparePreview,
   probeMedia,
+  saveProject,
   waveform,
   type CaptionStyle,
   type EditPlan,
@@ -22,10 +25,12 @@ import {
   type Segment,
   type Title,
   type Transcript,
+  type Transition,
+  type TransitionKind,
 } from "../api";
 import { TaskProgress } from "../components";
 import { BackIcon, PauseIcon, PlayIcon, ScissorsIcon } from "../icons";
-import { baseName, bytes, clock, load } from "../util";
+import { baseName, bytes, clock, dirName, join, load, stem, store } from "../util";
 import Stage from "../editor/Stage";
 import Timeline from "../editor/Timeline";
 import CutPanel from "../editor/CutPanel";
@@ -35,7 +40,8 @@ import HighlightsPanel from "../editor/HighlightsPanel";
 import FramePanel from "../editor/FramePanel";
 import MusicPanel from "../editor/MusicPanel";
 import ExportPanel from "../editor/ExportPanel";
-import { outputSize, toOutput, type ClipSpec, type EditorApi, type Pauses, type ProjectApi } from "../editor/state";
+import { projectFile, readProjectFile } from "../editor/exporting";
+import { outputSize, toOutput, type ClipEditorState, type ClipSpec, type EditorApi, type Pauses, type ProjectApi } from "../editor/state";
 
 const MEDIA_EXTENSIONS = ["mp4", "mkv", "mov", "webm", "m4v", "avi", "flv", "ts", "mp3", "m4a", "wav", "flac", "ogg", "opus", "aac"];
 
@@ -43,6 +49,26 @@ const chooseMedia = async (multiple: boolean): Promise<string[]> => {
   const picked = await open({ multiple, filters: [{ name: "Video and audio", extensions: MEDIA_EXTENSIONS }] });
   return picked === null ? [] : Array.isArray(picked) ? picked : [picked];
 };
+
+const TRANSITIONS: [TransitionKind | "", string][] = [
+  ["", "Cut"],
+  ["fade", "Crossfade"],
+  ["fadeblack", "Through black"],
+  ["wipeleft", "Wipe"],
+  ["slideleft", "Slide"],
+  ["circleopen", "Circle"],
+  ["zoomin", "Zoom"],
+];
+
+/** How much a transition overlaps its neighbours: what the engine does
+ * (at most half of either clip), so the preview's clock agrees. */
+const overlapOf = (t: Transition | null, before: number, after: number) => {
+  const d = Math.min(t?.duration ?? 0, before / 2, after / 2);
+  return d < 0.04 ? 0 : d;
+};
+
+/** A clip in the project; `initial` restores a saved editor. */
+type ClipEntry = { id: string; path: string; initial?: { editor: ClipEditorState; titles: Title[] } };
 
 type Props = {
   /** Files to add, from elsewhere in the app; `n` makes repeats count. */
@@ -53,7 +79,11 @@ type Props = {
 
 /** The project: clips in order, and what they share. */
 export default function EditorPage({ request, onOpen }: Props) {
-  const [clips, setClips] = useState<{ id: string; path: string }[]>([]);
+  const [clips, setClips] = useState<ClipEntry[]>([]);
+  const [transitions, setTransitions] = useState<Record<string, Transition | null>>({});
+  const [projectPath, setProjectPath] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [active, setActive] = useState<string | null>(null);
   const [specs, setSpecs] = useState<Record<string, ClipSpec>>({});
   const [frame, setFrame] = useState<Frame | null>(null);
@@ -75,7 +105,9 @@ export default function EditorPage({ request, onOpen }: Props) {
     if (request) add(request.paths);
   }, [request, add]);
 
-  const ordered = clips.map((c) => specs[c.id]).filter((s): s is ClipSpec => !!s);
+  const ordered = clips
+    .map((c, i): ClipSpec | undefined => specs[c.id] && { ...specs[c.id], transition: i === 0 ? null : (transitions[c.id] ?? null) })
+    .filter((s): s is ClipSpec => !!s);
   const first = ordered[0]?.media;
 
   // Caption placement follows the output frame's orientation.
@@ -91,16 +123,91 @@ export default function EditorPage({ request, onOpen }: Props) {
   const close = () => {
     setClips([]);
     setSpecs({});
+    setTransitions({});
     setActive(null);
     setFrame(null);
     setMusic(null);
     setCaptionsOn(false);
+    setProjectPath(null);
+    setSaved(null);
+    clearAutosave();
   };
+
+  // Saving. The file is rebuilt from the clips' latest state each time;
+  // `saved` is that JSON as last written, so changes show as unsaved.
+  const ready = ordered.length === clips.length && clips.length > 0;
+  const json = ready ? JSON.stringify(projectFile(project)) : null;
+  const dirty = json !== null && json !== saved;
+  const saveTo = async (path: string | null) => {
+    if (!json) return;
+    let target = path;
+    if (!target) {
+      const first = ordered[0].media.path;
+      target = await save({ defaultPath: join(dirName(first), `${stem(first)}.mxp`), filters: [{ name: "mx project", extensions: ["mxp"] }] });
+      if (!target) return;
+    }
+    try {
+      await saveProject(target, JSON.parse(json));
+      setProjectPath(target);
+      setSaved(json);
+      store("lastProject", target);
+    } catch (e) {
+      setFileError(errorText(e));
+    }
+  };
+  const openFile = async (path: string | null) => {
+    try {
+      const raw = await loadProject(path);
+      if (raw === null) return;
+      const f = readProjectFile(raw);
+      const entries = f.clips.map((c) => ({
+        id: newTaskId(),
+        path: c.source,
+        initial: { editor: c.editor, titles: c.titles ?? [] },
+      }));
+      setClips(entries);
+      setSpecs({});
+      setTransitions(Object.fromEntries(entries.map((e, i) => [e.id, f.clips[i].transition ?? null])));
+      setActive(entries[0]?.id ?? null);
+      setFrame(f.frame ?? null);
+      setMusic(f.music ?? null);
+      setCaptionsOn(f.editor?.captionsOn ?? !!f.captions);
+      setStyle(f.editor?.style ?? f.captions ?? null);
+      setProjectPath(path);
+      setSaved(null);
+      setFileError(null);
+    } catch (e) {
+      setFileError(errorText(e));
+    }
+  };
+
+  // Autosave a moment after each change, so closing the window loses
+  // nothing; the start screen offers it back.
+  useEffect(() => {
+    if (!json) return;
+    const t = setTimeout(() => saveProject(null, JSON.parse(json)).catch(() => {}), 1500);
+    return () => clearTimeout(t);
+  }, [json]);
+
+  // Ctrl+S saves, Ctrl+Shift+S saves as.
+  const saveKeys = useRef<(e: KeyboardEvent) => void>(() => {});
+  saveKeys.current = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && clips.length) {
+      e.preventDefault();
+      saveTo(e.shiftKey ? null : projectPath);
+    }
+  };
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => saveKeys.current(e);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
   const remove = (id: string) => {
     const i = clips.findIndex((c) => c.id === id);
     const rest = clips.filter((c) => c.id !== id);
     setClips(rest);
     setSpecs(({ [id]: _, ...others }) => others);
+    setTransitions(({ [id]: _, ...others }) => others);
     if (active === id) setActive(rest[Math.min(i, rest.length - 1)]?.id ?? null);
   };
   const move = (id: string, by: number) => {
@@ -120,21 +227,46 @@ export default function EditorPage({ request, onOpen }: Props) {
   };
   const onSpec = useCallback((spec: ClipSpec) => setSpecs((s) => ({ ...s, [spec.id]: spec })), []);
 
-  if (clips.length === 0) return <Empty onOpen={onOpen} />;
+  if (clips.length === 0) return <Empty onOpen={onOpen} onOpenProject={openFile} error={fileError} />;
 
+  // Each clip's start on the output, overlapping by its transition.
   let offset = 0;
+  let previous = 0;
   const offsets: Record<string, number> = {};
-  for (const c of clips) {
+  clips.forEach((c, i) => {
+    const d = specs[c.id]?.outputDuration ?? 0;
+    const o = i === 0 ? 0 : overlapOf(transitions[c.id] ?? null, previous, d);
+    offset -= o;
     offsets[c.id] = offset;
-    offset += specs[c.id]?.outputDuration ?? 0;
-  }
+    offset += d;
+    previous = d;
+  });
 
   const sequence = (
     <div className="sequence">
       {clips.map((c, i) => {
         const spec = specs[c.id];
+        const t = transitions[c.id] ?? null;
         return (
-          <div key={c.id} className={`seq-clip${c.id === active ? " active" : ""}`} onClick={() => setActive(c.id)} title={c.path}>
+          <div key={c.id} className="row" style={{ gap: 6, flex: "none" }}>
+          {i > 0 && (
+            <select
+              className="seq-transition"
+              title="How this clip takes over from the one before"
+              value={t?.kind ?? ""}
+              onChange={(e) => {
+                const kind = e.target.value as TransitionKind | "";
+                setTransitions((all) => ({ ...all, [c.id]: kind ? { kind, duration: t?.duration ?? 0.6 } : null }));
+              }}
+            >
+              {TRANSITIONS.map(([kind, label]) => (
+                <option key={kind} value={kind}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          )}
+          <div className={`seq-clip${c.id === active ? " active" : ""}`} onClick={() => setActive(c.id)} title={c.path}>
             <span className="n">{i + 1}</span>
             <span className="ellipsis">{baseName(c.path)}</span>
             <span className="faint">{spec ? clock(spec.outputDuration) : "…"}</span>
@@ -152,6 +284,7 @@ export default function EditorPage({ request, onOpen }: Props) {
               ✕
             </button>
           </div>
+          </div>
         );
       })}
       <button className="btn small" onClick={async () => onOpen(await chooseMedia(true))}>
@@ -161,6 +294,31 @@ export default function EditorPage({ request, onOpen }: Props) {
         {clips.length > 1 ? `${clips.length} clips · ${clock(offset)}` : ""}
       </span>
     </div>
+  );
+
+  const toolbar = (
+    <>
+      <span className="faint ellipsis" title={projectPath ?? undefined}>
+        {projectPath ? baseName(projectPath) : "Unsaved project"}
+        {dirty ? " •" : ""}
+      </span>
+      {fileError && <span className="error ellipsis">{fileError}</span>}
+      <button className="btn small" onClick={() => saveTo(projectPath)} title="Save (Ctrl+S)" disabled={!ready}>
+        Save
+      </button>
+      <button className="btn small ghost" onClick={() => saveTo(null)} title="Save as (Ctrl+Shift+S)" disabled={!ready}>
+        Save as
+      </button>
+      <button
+        className="btn small ghost"
+        onClick={async () => {
+          const path = await open({ filters: [{ name: "mx project", extensions: ["mxp"] }] });
+          if (typeof path === "string") openFile(path);
+        }}
+      >
+        Open
+      </button>
+    </>
   );
 
   return (
@@ -175,6 +333,8 @@ export default function EditorPage({ request, onOpen }: Props) {
             outputOffset={offsets[c.id] ?? 0}
             playRequest={playNext?.id === c.id ? playNext.n : 0}
             sequence={sequence}
+            toolbar={toolbar}
+            initial={c.initial}
             onSpec={onSpec}
             onEnded={() => onEnded(c.id)}
             onClose={close}
@@ -185,8 +345,13 @@ export default function EditorPage({ request, onOpen }: Props) {
   );
 }
 
-function Empty({ onOpen }: { onOpen: (paths: string[]) => void }) {
+function Empty(p: { onOpen: (paths: string[]) => void; onOpenProject: (path: string | null) => void; error: string | null }) {
+  const { onOpen } = p;
   const recent = load<string[]>("recent", []);
+  const [autosave, setAutosave] = useState(false);
+  useEffect(() => {
+    loadProject(null).then((a) => setAutosave(a !== null)).catch(() => {});
+  }, []);
   return (
     <div className="drop">
       <div>
@@ -195,9 +360,26 @@ function Empty({ onOpen }: { onOpen: (paths: string[]) => void }) {
           <p className="muted" style={{ margin: "0 0 18px" }}>
             Drop files anywhere on this window, or pick some. Several files become clips in one video.
           </p>
-          <button className="btn primary" onClick={async () => onOpen(await chooseMedia(true))}>
-            Choose files...
-          </button>
+          <div className="row" style={{ justifyContent: "center" }}>
+            <button className="btn primary" onClick={async () => onOpen(await chooseMedia(true))}>
+              Choose files...
+            </button>
+            <button
+              className="btn"
+              onClick={async () => {
+                const path = await open({ filters: [{ name: "mx project", extensions: ["mxp"] }] });
+                if (typeof path === "string") p.onOpenProject(path);
+              }}
+            >
+              Open project...
+            </button>
+          </div>
+          {autosave && (
+            <button className="btn ghost" style={{ marginTop: 14 }} onClick={() => p.onOpenProject(null)}>
+              Restore last session
+            </button>
+          )}
+          {p.error && <p className="error">{p.error}</p>}
         </div>
         {recent.length > 0 && (
           <div className="recent">
@@ -226,6 +408,9 @@ type WorkspaceProps = {
   /** Changes when the project wants this clip to start playing. */
   playRequest: number;
   sequence: React.ReactNode;
+  /** Project file controls, for the top bar. */
+  toolbar: React.ReactNode;
+  initial?: { editor: ClipEditorState; titles: Title[] };
   onSpec: (spec: ClipSpec) => void;
   onEnded: () => void;
   onClose: () => void;
@@ -250,16 +435,17 @@ function Workspace(p: WorkspaceProps) {
   const [zoom, setZoom] = useState(1);
   const [tab, setTab] = useState<Tab>("cut");
 
-  const [pauses, setPauses] = useState<Pauses | null>(null);
-  const [removePauses, setRemovePauses] = useState(true);
-  const [padding, setPadding] = useState(0.12);
-  const [manualCuts, setManualCuts] = useState<Range[]>([]);
-  const [transcript, setTranscript] = useState<Transcript | null>(null);
-  const [removed, setRemoved] = useState<number[]>([]);
-  const [titles, setTitles] = useState<Title[]>([]);
+  const saved = p.initial?.editor;
+  const [pauses, setPauses] = useState<Pauses | null>(saved?.pauses ?? null);
+  const [removePauses, setRemovePauses] = useState(saved?.removePauses ?? true);
+  const [padding, setPadding] = useState(saved?.padding ?? 0.12);
+  const [manualCuts, setManualCuts] = useState<Range[]>(saved?.manualCuts ?? []);
+  const [transcript, setTranscript] = useState<Transcript | null>(saved?.transcript ?? null);
+  const [removed, setRemoved] = useState<number[]>(saved?.removed ?? []);
+  const [titles, setTitles] = useState<Title[]>(p.initial?.titles ?? []);
   const [selectedTitle, setSelectedTitle] = useState<number | null>(null);
-  const [highlights, setHighlights] = useState<Highlight[] | null>(null);
-  const [skipCuts, setSkipCuts] = useState(true);
+  const [highlights, setHighlights] = useState<Highlight[] | null>(saved?.highlights ?? null);
+  const [skipCuts, setSkipCuts] = useState(saved?.skipCuts ?? true);
   const [plan, setPlan] = useState<EditPlan>({ cuts: [], keep: [], outputDuration: 0 });
   const [cues, setCues] = useState<Segment[]>([]);
 
@@ -329,8 +515,10 @@ function Workspace(p: WorkspaceProps) {
         outputDuration: plan.keep.length ? plan.outputDuration : media.duration,
         transcript: keptTranscript,
         titles,
+        transition: null,
+        editor: { pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts },
       },
-    [media, plan, keptTranscript, titles, p.id],
+    [media, plan, keptTranscript, titles, p.id, pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts],
   );
   const onSpec = p.onSpec;
   useEffect(() => {
@@ -561,6 +749,7 @@ function Workspace(p: WorkspaceProps) {
         </span>
         <span className="grow" />
         {loadError && <span className="error ellipsis">{loadError}</span>}
+        {p.toolbar}
       </div>
 
       <div className="stage">

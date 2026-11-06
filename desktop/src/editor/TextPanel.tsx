@@ -202,6 +202,24 @@ export default function TextPanel({ ed }: { ed: EditorApi }) {
                   <span>Pop in</span>
                 </label>
               </div>
+              <div className="row" style={{ marginTop: 10 }}>
+                <label className="toggle grow">
+                  <input
+                    type="checkbox"
+                    checked={!!style.highlight}
+                    onChange={(e) => ed.project.setStyle({ ...style, highlight: e.target.checked ? "#ffd400" : null })}
+                  />
+                  <span>Highlight the spoken word</span>
+                </label>
+                {style.highlight && (
+                  <input
+                    type="color"
+                    value={style.highlight}
+                    onChange={(e) => ed.project.setStyle({ ...style, highlight: e.target.value })}
+                    style={{ width: 28, height: 24, border: 0, background: "none" }}
+                  />
+                )}
+              </div>
             </div>
           )}
 

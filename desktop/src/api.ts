@@ -39,7 +39,9 @@ export type Breakdown = {
 };
 export type Highlight = { range: Range; score: number; breakdown: Breakdown };
 
-export type Segment = { start: number; end: number; text: string };
+export type Word = { start: number; end: number; text: string };
+/** `words` are estimated times (whisper only times segments); may be absent. */
+export type Segment = { start: number; end: number; text: string; words?: Word[] };
 export type Transcript = { segments: Segment[] };
 
 export type CaptionStyle = {
@@ -50,6 +52,8 @@ export type CaptionStyle = {
   font: string;
   uppercase: boolean;
   pop: boolean;
+  /** `#rrggbb` for the word being spoken, or null. */
+  highlight: string | null;
 };
 
 export type Fit = { kind: "crop"; position: number } | { kind: "blur" } | { kind: "pad" };
@@ -156,20 +160,31 @@ export type Title = {
 
 export type Music = { source: string; offset: number; volume: number; duck: boolean; fade_out: number };
 
-export type ClipRequest = {
+export type TransitionKind = "fade" | "fadeblack" | "wipeleft" | "wiperight" | "slideleft" | "slideright" | "circleopen" | "zoomin";
+/** How a clip takes over from the one before it. */
+export type Transition = { kind: TransitionKind; duration: number };
+
+/** One clip, as mx-core's renderer (and `mx render`) reads it. */
+export type ProjectClip = {
   source: string;
   keep: Range[];
   volume: number;
   titles: Title[];
   /** Source-timed, without the lines deleted in the editor. */
   transcript: Transcript | null;
+  transition: Transition | null;
+};
+
+export type Project = {
+  clips: ProjectClip[];
+  frame: Frame | null;
+  music: Music | null;
+  /** Burn the transcripts in with this style; `null` for no captions. */
+  captions: CaptionStyle | null;
 };
 
 export type ExportRequest = {
-  clips: ClipRequest[];
-  frame: Frame | null;
-  music: Music | null;
-  captions: CaptionStyle | null;
+  project: Project;
   output: string;
   codec: "h264" | "hevc" | "av1";
   quality: number | null;
@@ -184,6 +199,12 @@ export const exportGif = (taskId: string, req: GifRequest) => invoke<Exported>("
 export const listEncoders = () => invoke<EncoderInfo[]>("list_encoders");
 export const doctor = () => invoke<Check[]>("doctor");
 export const startupFiles = () => invoke<string[]>("startup_files");
+
+/** Save `project` (any JSON) to `path`, or to the autosave when null. */
+export const saveProject = (path: string | null, project: unknown) => invoke<string>("save_project", { path, project });
+/** A saved project, or the autosave (null when there isn't one). */
+export const loadProject = (path: string | null) => invoke<unknown>("load_project", { path });
+export const clearAutosave = () => invoke<void>("clear_autosave");
 
 /** Errors from commands arrive as strings; anything else is a bug. */
 export const errorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : String(e));

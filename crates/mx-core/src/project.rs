@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::ffmpeg::ops::Frame;
-use crate::speech::captions::{ass_text, ass_time};
-use crate::speech::{Segment, Transcript};
+use crate::speech::captions::{ass_color, ass_text, ass_time};
+use crate::speech::{CaptionStyle, Transcript};
 use crate::timeline::{Range, map_range, total};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -26,6 +26,9 @@ pub struct Project {
     pub frame: Option<Frame>,
     #[serde(default)]
     pub music: Option<Music>,
+    /// Burn the clips' transcripts in as captions, in this style.
+    #[serde(default)]
+    pub captions: Option<CaptionStyle>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +43,12 @@ pub struct Clip {
     /// Text on screen, timed on this clip's source.
     #[serde(default)]
     pub titles: Vec<Title>,
+    /// What's said, timed on this clip's source, for captions.
+    #[serde(default)]
+    pub transcript: Option<Transcript>,
+    /// How this clip takes over from the one before it. `None` is a cut.
+    #[serde(default)]
+    pub transition: Option<Transition>,
 }
 
 fn one() -> f64 {
@@ -48,8 +57,62 @@ fn one() -> f64 {
 
 impl Clip {
     pub fn new(source: impl Into<PathBuf>) -> Self {
-        Self { source: source.into(), keep: Vec::new(), volume: 1.0, titles: Vec::new() }
+        Self {
+            source: source.into(),
+            keep: Vec::new(),
+            volume: 1.0,
+            titles: Vec::new(),
+            transcript: None,
+            transition: None,
+        }
     }
+}
+
+/// The picture and sound of two clips overlapping as one hands over to
+/// the next. It overlaps them, so it shortens the video by its duration.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Transition {
+    pub kind: TransitionKind,
+    /// Seconds.
+    pub duration: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransitionKind {
+    /// Crossfade (dissolve).
+    Fade,
+    /// Fade through black.
+    FadeBlack,
+    WipeLeft,
+    WipeRight,
+    SlideLeft,
+    SlideRight,
+    CircleOpen,
+    ZoomIn,
+}
+
+impl TransitionKind {
+    /// The name ffmpeg's `xfade` filter knows it by.
+    pub fn xfade(self) -> &'static str {
+        match self {
+            Self::Fade => "fade",
+            Self::FadeBlack => "fadeblack",
+            Self::WipeLeft => "wipeleft",
+            Self::WipeRight => "wiperight",
+            Self::SlideLeft => "slideleft",
+            Self::SlideRight => "slideright",
+            Self::CircleOpen => "circleopen",
+            Self::ZoomIn => "zoomin",
+        }
+    }
+}
+
+/// Shortest clip a transition may eat into: at most half of either clip
+/// overlaps, so a 1 s transition between 1 s clips becomes 0.5 s.
+fn overlap(t: Option<Transition>, before: f64, after: f64) -> f64 {
+    let d = t.map_or(0.0, |t| t.duration).min(before / 2.0).min(after / 2.0);
+    if d < 0.04 { 0.0 } else { d }
 }
 
 /// A soundtrack under the whole project.
@@ -114,6 +177,8 @@ pub struct Placement {
     pub offset: f64,
     /// Its kept source ranges (the whole source when it keeps everything).
     pub keep: Vec<Range>,
+    /// How long it overlaps the clip before it (its transition in).
+    pub overlap: f64,
 }
 
 impl Placement {
@@ -131,18 +196,37 @@ impl Project {
     /// Each clip's place on the output timeline, given the source
     /// durations (in clip order).
     pub fn layout(&self, durations: &[f64]) -> Vec<Placement> {
-        let mut offset = 0.0;
-        self.clips
+        let keeps = self
+            .clips
             .iter()
             .zip(durations)
-            .map(|(clip, &d)| {
-                let keep = if clip.keep.is_empty() { vec![Range::new(0.0, d)] } else { clip.keep.clone() };
-                let p = Placement { offset, keep };
-                offset += p.duration();
-                p
-            })
-            .collect()
+            .map(|(clip, &d)| if clip.keep.is_empty() { vec![Range::new(0.0, d)] } else { clip.keep.clone() })
+            .collect();
+        self.arrange(keeps)
     }
+
+    /// Place clips that keep `keeps` (one list per clip) back to back,
+    /// each overlapping the one before by its transition.
+    pub fn arrange(&self, keeps: Vec<Vec<Range>>) -> Vec<Placement> {
+        let mut out: Vec<Placement> = Vec::with_capacity(keeps.len());
+        for (clip, keep) in self.clips.iter().zip(keeps) {
+            let len = total(&keep);
+            let (offset, overlap) = match out.last() {
+                None => (0.0, 0.0),
+                Some(prev) => {
+                    let o = overlap(clip.transition, prev.duration(), len);
+                    (prev.offset + prev.duration() - o, o)
+                }
+            };
+            out.push(Placement { offset, keep, overlap });
+        }
+        out
+    }
+}
+
+/// How long `layout` plays for.
+pub fn length(layout: &[Placement]) -> f64 {
+    layout.last().map_or(0.0, |p| p.offset + p.duration())
 }
 
 /// Per-clip transcripts (source-timed, `None` for clips without one) as
@@ -151,24 +235,9 @@ pub fn output_transcript(layout: &[Placement], transcripts: &[Option<Transcript>
     let mut segments = Vec::new();
     for (place, t) in layout.iter().zip(transcripts) {
         let Some(t) = t else { continue };
-        for s in &t.segments {
-            let pieces = place.place(Range::new(s.start, s.end));
-            if let (Some(first), Some(last)) = (pieces.first(), pieces.last()) {
-                segments.push(Segment { start: first.start, end: last.end, text: s.text.clone() });
-            }
-        }
+        segments.extend(t.segments.iter().filter_map(|s| s.placed(|r| place.place(r))));
     }
     Transcript { segments }
-}
-
-/// `#rrggbb` -> ASS `&H00BBGGRR` (white if it doesn't parse).
-fn ass_color(hex: &str) -> String {
-    let h = hex.trim_start_matches('#');
-    if h.len() == 6 && u32::from_str_radix(h, 16).is_ok() {
-        format!("&H00{}{}{}", &h[4..6], &h[2..4], &h[0..2]).to_uppercase()
-    } else {
-        "&H00FFFFFF".to_string()
-    }
 }
 
 /// An ASS file drawing every clip's titles at their output times on a
@@ -218,6 +287,7 @@ pub fn titles_ass(clips: &[Clip], layout: &[Placement], width: u32, height: u32)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::speech::Segment;
 
     fn r(start: f64, end: f64) -> Range {
         Range::new(start, end)
@@ -234,17 +304,32 @@ mod tests {
         let p = Project { clips: vec![a, Clip::new("b.mp4")], ..Project::default() };
         let layout = p.layout(&[10.0, 4.0]);
         assert_eq!(layout[0].offset, 0.0);
-        assert_eq!(layout[1], Placement { offset: 3.0, keep: vec![r(0.0, 4.0)] });
+        assert_eq!(layout[1], Placement { offset: 3.0, keep: vec![r(0.0, 4.0)], overlap: 0.0 });
         // Source 5.5 in clip a plays at 2.5; source 1 in clip b at 4.
         assert_eq!(layout[0].place(r(5.5, 5.6))[0].start, 2.5);
         assert_eq!(layout[1].place(r(1.0, 2.0)), [r(4.0, 5.0)]);
     }
 
     #[test]
+    fn transitions_overlap_clips_and_are_capped_at_half_a_clip() {
+        let fade = |duration| Some(Transition { kind: TransitionKind::Fade, duration });
+        let mut b = Clip::new("b");
+        b.transition = fade(1.0);
+        let mut c = Clip::new("c");
+        c.transition = fade(5.0);
+        let p = Project { clips: vec![Clip::new("a"), b, c], ..Project::default() };
+        let layout = p.layout(&[4.0, 3.0, 2.0]);
+        // b starts 1 s before a ends; c's 5 s ask is capped at half of c.
+        assert_eq!((layout[1].offset, layout[1].overlap), (3.0, 1.0));
+        assert_eq!((layout[2].offset, layout[2].overlap), (5.0, 1.0));
+        assert_eq!(length(&layout), 7.0);
+    }
+
+    #[test]
     fn transcripts_join_on_the_output_timeline() {
         let p = Project { clips: vec![Clip::new("a"), Clip::new("b")], ..Project::default() };
         let layout = p.layout(&[3.0, 3.0]);
-        let t = |s: f64| Some(Transcript { segments: vec![Segment { start: s, end: s + 1.0, text: "x".into() }] });
+        let t = |s: f64| Some(Transcript { segments: vec![Segment { start: s, end: s + 1.0, text: "x".into(), words: Vec::new() }] });
         let out = output_transcript(&layout, &[t(1.0), None]);
         assert_eq!(out.segments.len(), 1);
         let out = output_transcript(&layout, &[t(1.0), t(0.5)]);

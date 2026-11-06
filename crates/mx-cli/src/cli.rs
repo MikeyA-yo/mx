@@ -224,6 +224,9 @@ pub enum Command {
         /// Don't animate phrases in
         #[arg(long)]
         no_pop: bool,
+        /// Colour the word being spoken, karaoke style, e.g. '#ffd400'
+        #[arg(long, value_name = "COLOR")]
+        highlight: Option<String>,
         #[command(flatten)]
         speech: SpeechArgs,
         #[command(flatten)]

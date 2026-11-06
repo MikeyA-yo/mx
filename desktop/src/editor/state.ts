@@ -15,6 +15,7 @@ import type {
   SilenceReport,
   Title,
   Transcript,
+  Transition,
 } from "../api";
 
 export type Pauses = {
@@ -22,6 +23,20 @@ export type Pauses = {
   /** Settings the report was made with. */
   minSilence: number;
   thresholdDb: number | null;
+};
+
+/** A clip editor's own state: what's saved with a project so the clip
+ * reopens as it was left. */
+export type ClipEditorState = {
+  pauses: Pauses | null;
+  removePauses: boolean;
+  padding: number;
+  manualCuts: Range[];
+  /** The whole transcript, deleted lines included. */
+  transcript: Transcript | null;
+  removed: number[];
+  highlights: Highlight[] | null;
+  skipCuts: boolean;
 };
 
 /** What a clip contributes to the export, kept current by its editor. */
@@ -34,6 +49,9 @@ export type ClipSpec = {
   /** Without the lines deleted in the text editor. */
   transcript: Transcript | null;
   titles: Title[];
+  /** How it takes over from the clip before (set in the clip bar). */
+  transition: Transition | null;
+  editor: ClipEditorState;
 };
 
 /** Settings shared by every clip. */

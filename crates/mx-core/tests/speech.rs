@@ -49,6 +49,14 @@ fn transcribes_speech_and_burns_it_in() {
     for s in &transcript.segments {
         assert!(0.0 <= s.start && s.start <= s.end && s.end <= duration + 0.1, "{s:?}");
     }
+    // Every segment has its words, in order and inside it.
+    for s in &transcript.segments {
+        assert_eq!(s.words.len(), s.text.split_whitespace().count(), "{s:?}");
+        for pair in s.words.windows(2) {
+            assert!(pair[0].start <= pair[1].start, "{s:?}");
+        }
+        assert!(s.words.iter().all(|w| w.start >= s.start - 1e-6 && w.end <= s.end + 1e-6), "{s:?}");
+    }
     // The second sentence starts after the pause.
     let second = transcript.segments.iter().find(|s| s.text.to_lowercase().contains("lessons")).unwrap();
     assert!(second.start > 2.0, "{second:?}");

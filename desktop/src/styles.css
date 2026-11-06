@@ -952,3 +952,16 @@ kbd {
   pointer-events: auto;
   cursor: pointer;
 }
+.seq-transition {
+  background: var(--bg);
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 3px 4px;
+  max-width: 108px;
+}
+.seq-transition:focus {
+  outline: none;
+  border-color: var(--accent);
+}

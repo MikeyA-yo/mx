@@ -2,14 +2,16 @@
 //! of Shorts/Reels/TikTok captions, written as an ASS subtitle file for
 //! libass to draw.
 //!
-//! The whisper filter only reports segment times, not word times, so a
-//! segment's duration is shared among its phrases by character count.
-//! Speech is close enough to constant-rate within one segment (a few
-//! seconds) for that to stay in step with the voice.
+//! The whisper filter only reports segment times, not word times. Word
+//! times are estimated when transcribing (each word gets a share of the
+//! segment's voiced time by length; see
+//! [`super::transcribe::estimate_words`]), and phrases are timed from
+//! their words. Speech is close enough to constant-rate within one
+//! segment (a few seconds) for that to stay in step with the voice.
 
 use serde::{Deserialize, Serialize};
 
-use super::transcribe::{Segment, Transcript};
+use super::transcribe::{Segment, Transcript, Word, estimate_words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptionStyle {
@@ -25,6 +27,10 @@ pub struct CaptionStyle {
     pub uppercase: bool,
     /// Each phrase pops in, growing from 85% to full size.
     pub pop: bool,
+    /// Colour (`#rrggbb`) for the word being spoken, karaoke style;
+    /// `None` keeps every word white.
+    #[serde(default)]
+    pub highlight: Option<String>,
 }
 
 impl CaptionStyle {
@@ -39,25 +45,32 @@ impl CaptionStyle {
             font: "Arial".to_string(),
             uppercase: false,
             pop: true,
+            highlight: None,
         }
     }
 }
 
 /// Split `transcript` into on-screen phrases. A phrase also ends after
-/// punctuation that closes a clause, so captions follow the speech's rhythm.
+/// punctuation that closes a clause, so captions follow the speech's
+/// rhythm. Each phrase carries its words, timed from the segment's word
+/// estimates when it has them, else by sharing the segment by length.
+/// Within a segment phrases follow on without gaps, so a pause keeps the
+/// last phrase on screen instead of flashing nothing.
 pub fn cues(transcript: &Transcript, style: &CaptionStyle) -> Vec<Segment> {
     let mut out = Vec::new();
     for seg in &transcript.segments {
-        let words: Vec<&str> = seg.text.split_whitespace().collect();
-        let mut phrases: Vec<Vec<&str>> = Vec::new();
-        let mut current: Vec<&str> = Vec::new();
+        let count = seg.text.split_whitespace().count();
+        let words = if seg.words.len() == count { seg.words.clone() } else { estimate_words(seg.start, seg.end, &seg.text, &[]) };
+        let mut phrases: Vec<Vec<Word>> = Vec::new();
+        let mut current: Vec<Word> = Vec::new();
         for word in words {
-            let chars: usize = current.iter().map(|w| w.chars().count() + 1).sum::<usize>() + word.chars().count();
+            let chars: usize = current.iter().map(|w| w.text.chars().count() + 1).sum::<usize>() + word.text.chars().count();
             if !current.is_empty() && (current.len() >= style.max_words || chars > style.max_chars) {
                 phrases.push(std::mem::take(&mut current));
             }
+            let closes = word.text.ends_with(['.', ',', '?', '!', ';', ':']);
             current.push(word);
-            if word.ends_with(['.', ',', '?', '!', ';', ':']) {
+            if closes {
                 phrases.push(std::mem::take(&mut current));
             }
         }
@@ -65,20 +78,32 @@ pub fn cues(transcript: &Transcript, style: &CaptionStyle) -> Vec<Segment> {
             phrases.push(current);
         }
 
-        let texts: Vec<String> = phrases.iter().map(|p| p.join(" ")).collect();
-        let total_chars: usize = texts.iter().map(|t| t.chars().count()).sum();
-        if total_chars == 0 {
-            continue;
+        let first = out.len();
+        for words in phrases {
+            let text = words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+            out.push(Segment { start: words[0].start, end: words[words.len() - 1].end, text, words });
         }
-        let mut t = seg.start;
-        for text in texts {
-            let share = text.chars().count() as f64 / total_chars as f64;
-            let end = t + share * (seg.end - seg.start);
-            out.push(Segment { start: t, end, text });
-            t = end;
+        // Cover the whole segment, each phrase lasting until the next.
+        let n = out.len();
+        if n > first {
+            out[first].start = out[first].start.min(seg.start);
+            for i in first..n - 1 {
+                out[i].end = out[i + 1].start;
+            }
+            out[n - 1].end = out[n - 1].end.max(seg.end);
         }
     }
     out
+}
+
+/// `#rrggbb` -> ASS `&H00BBGGRR` (white if it doesn't parse).
+pub(crate) fn ass_color(hex: &str) -> String {
+    let h = hex.trim_start_matches('#');
+    if h.len() == 6 && u32::from_str_radix(h, 16).is_ok() {
+        format!("&H00{}{}{}", &h[4..6], &h[2..4], &h[0..2]).to_uppercase()
+    } else {
+        "&H00FFFFFF".to_string()
+    }
 }
 
 /// `h:mm:ss.cc`, ASS's centisecond timestamps.
@@ -123,12 +148,31 @@ pub fn to_ass(cues: &[Segment], width: u32, height: u32, style: &CaptionStyle) -
         font = style.font
     );
     for c in cues {
-        ass += &format!(
-            "Dialogue: 0,{},{},Caption,,0,0,0,,{pop}{}\n",
-            ass_time(c.start),
-            ass_time(c.end),
-            ass_text(&c.text, style.uppercase)
-        );
+        let line = |start: f64, end: f64, pop: &str, text: &str| {
+            format!("Dialogue: 0,{},{},Caption,,0,0,0,,{pop}{text}\n", ass_time(start), ass_time(end))
+        };
+        match &style.highlight {
+            // One line per word, the phrase redrawn with that word in the
+            // highlight colour, from the word's start to the next's.
+            Some(color) if c.words.len() > 1 => {
+                let on = ass_color(color);
+                for (i, w) in c.words.iter().enumerate() {
+                    let start = if i == 0 { c.start } else { w.start };
+                    let end = c.words.get(i + 1).map_or(c.end, |next| next.start);
+                    let text: Vec<String> = c
+                        .words
+                        .iter()
+                        .enumerate()
+                        .map(|(j, w)| {
+                            let t = ass_text(&w.text, style.uppercase);
+                            if j == i { format!(r"{{\1c{on}&}}{t}{{\1c&H00FFFFFF&}}") } else { t }
+                        })
+                        .collect();
+                    ass += &line(start, end.max(start), if i == 0 { pop } else { "" }, &text.join(" "));
+                }
+            }
+            _ => ass += &line(c.start, c.end, pop, &ass_text(&c.text, style.uppercase)),
+        }
     }
     ass
 }
@@ -138,7 +182,7 @@ mod tests {
     use super::*;
 
     fn transcript(start: f64, end: f64, text: &str) -> Transcript {
-        Transcript { segments: vec![Segment { start, end, text: text.into() }] }
+        Transcript { segments: vec![Segment { start, end, text: text.into(), words: Vec::new() }] }
     }
 
     #[test]
@@ -150,20 +194,33 @@ mod tests {
     }
 
     #[test]
-    fn phrase_times_split_the_segment_by_characters_and_cover_it() {
+    fn phrase_times_split_the_segment_by_length_and_cover_it() {
         let style = CaptionStyle::for_frame(1920, 1080);
         let c = cues(&transcript(2.0, 4.0, "Hello there, everyone"), &style);
         assert_eq!(c.len(), 2);
         assert!((c[0].start - 2.0).abs() < 1e-9 && (c[1].end - 4.0).abs() < 1e-9);
         assert!((c[0].end - c[1].start).abs() < 1e-9);
-        // "Hello there," is 12 of 20 characters.
-        assert!((c[0].end - 3.2).abs() < 1e-9, "{c:?}");
+        // Words weigh their length plus one: "Hello there," is 13 of 22.
+        assert!((c[0].end - (2.0 + 2.0 * 13.0 / 22.0)).abs() < 1e-9, "{c:?}");
+        assert_eq!(c[0].words.len(), 2);
+    }
+
+    #[test]
+    fn highlight_draws_a_line_per_word_with_that_word_coloured() {
+        let style = CaptionStyle { highlight: Some("#ffd400".into()), ..CaptionStyle::for_frame(1080, 1920) };
+        let c = cues(&transcript(0.0, 1.0, "big red dog"), &style);
+        let ass = to_ass(&c, 1080, 1920, &style);
+        let lines: Vec<&str> = ass.lines().filter(|l| l.starts_with("Dialogue")).collect();
+        assert_eq!(lines.len(), 3, "{ass}");
+        assert!(lines[1].ends_with(r",,big {\1c&H0000D4FF&}red{\1c&H00FFFFFF&} dog"), "{ass}");
+        // Only the first word's line pops in.
+        assert!(lines[0].contains(r"\fscx85") && !lines[1].contains(r"\fscx85"), "{ass}");
     }
 
     #[test]
     fn ass_has_scaled_style_and_escaped_text() {
         let style = CaptionStyle { uppercase: true, ..CaptionStyle::for_frame(1080, 1920) };
-        let ass = to_ass(&[Segment { start: 61.234, end: 62.5, text: r"a {b} c\d".into() }], 1080, 1920, &style);
+        let ass = to_ass(&[Segment { start: 61.234, end: 62.5, text: r"a {b} c\d".into(), words: Vec::new() }], 1080, 1920, &style);
         // 7.5% of 1080 = 81 px; bottom at 72% of 1920 -> 538 px margin.
         assert!(ass.contains("Style: Caption,Arial,81,"), "{ass}");
         assert!(ass.contains(",2,65,65,538,1\n"), "{ass}");

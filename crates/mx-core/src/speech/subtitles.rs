@@ -73,7 +73,7 @@ pub fn parse(text: &str) -> Result<Transcript> {
         let (Some(start), Some(end)) = (parse_timestamp(a), parse_timestamp(b)) else { continue };
         let body: Vec<String> = lines.map(strip_tags).filter(|l| !l.trim().is_empty()).collect();
         if !body.is_empty() {
-            segments.push(Segment { start, end, text: body.join(" ").trim().to_string() });
+            segments.push(Segment { start, end, text: body.join(" ").trim().to_string(), words: Vec::new() });
         }
     }
     if segments.is_empty() {
@@ -89,8 +89,8 @@ mod tests {
     fn sample() -> Transcript {
         Transcript {
             segments: vec![
-                Segment { start: 1.5, end: 3.25, text: "Hello there.".into() },
-                Segment { start: 3661.5, end: 3662.0, text: "An hour in.".into() },
+                Segment { start: 1.5, end: 3.25, text: "Hello there.".into(), words: Vec::new() },
+                Segment { start: 3661.5, end: 3662.0, text: "An hour in.".into(), words: Vec::new() },
             ],
         }
     }
@@ -111,7 +111,7 @@ mod tests {
         let vtt = "\u{feff}WEBVTT\r\nKind: captions\r\n\r\nNOTE made by hand\r\n\r\n\
                    00:01.000 --> 00:02.500 align:start position:0%\r\n<i>Two</i> <00:01.500>lines\r\nof text\r\n";
         let t = parse(vtt).unwrap();
-        assert_eq!(t.segments, [Segment { start: 1.0, end: 2.5, text: "Two lines of text".into() }]);
+        assert_eq!(t.segments, [Segment { start: 1.0, end: 2.5, text: "Two lines of text".into(), words: Vec::new() }]);
         assert!(parse("not subtitles").is_err());
     }
 }

@@ -63,13 +63,14 @@ mx highlights film.mp4 --export clips --vertical       # render them as 9:16 Sho
 mx gif in.mp4 loop.gif --from 5 --to 9 --fps 15 --width 480
 mx join intro.mp4 talk.mp4 outro.mp4 -o video.mp4      # one video, clips fitted into the first one's frame
 mx join a.mp4 b.mp4 -o short.mp4 -a 9:16 --music song.mp3 --music-volume 0.2
-mx render project.json out.mp4                         # clips, cuts, titles and music from a project file
+mx render my.mxp out.mp4                               # a project saved by the desktop editor
 
 mx transcribe talk.mp4                                 # -> talk.srt (also .vtt, .txt, .json with -o)
 mx transcribe talk.mp4 -l en -m small.en               # English-only model, more accurate
 mx captions short.mp4 captioned.mp4                    # transcribe + burn in Shorts-style captions
 mx captions short.mp4 captioned.mp4 --upper --words 3 --save-srt
 mx captions in.mp4 out.mp4 --subs fixed.srt            # burn in subtitles you've corrected
+mx captions in.mp4 out.mp4 --highlight '#ffd400'       # colour each word as it's spoken
 mx models                                              # speech models: sizes, what's installed
 ```
 
@@ -126,7 +127,11 @@ slower). Use `-m small.en` or larger when accuracy matters more: base heard
 **Captions** are short phrases (up to `--words`, breaking at commas and full
 stops) in big outlined text that pops in, higher up on vertical video to
 stay clear of Shorts/TikTok buttons. whisper only gives sentence-level times,
-so each phrase gets a share of its sentence's time by length. Audio is
+so word times are estimated while transcribing: each word gets a share of
+its sentence's *voiced* time by length, skipping the pauses the loudness
+envelope found inside it, so a mid-sentence pause doesn't drag the words
+after it early. Phrases are timed from their words, and `--highlight`
+colours the word being spoken. Audio is
 copied, not re-encoded. To fix mistakes, `--save-srt`, edit the .srt, and
 burn it with `--subs`.
 
@@ -181,7 +186,16 @@ several on the window), reorder them in the clip bar, and pick one to
 edit it. Each clip keeps its own cuts, transcript and titles in its own
 time, so reordering or recutting never strands a title; the frame,
 caption style and music belong to the whole project. Playback runs on
-from one clip into the next, with the music in step.
+from one clip into the next, with the music in step. Between clips, the
+clip bar picks a transition: crossfade, through black, wipe, slide,
+circle or zoom (`xfade`, with the sound crossfaded too); it overlaps the
+two clips, so the video gets shorter by its length.
+
+**Projects** save as `.mxp` (<kbd>Ctrl+S</kbd>, <kbd>Ctrl+Shift+S</kbd> to
+save as): mx-core's project JSON, which `mx render` reads, plus each
+clip's editor state (pause settings, deleted transcript lines, picks).
+Every change is also autosaved, and the start screen offers the last
+session back if the window was closed without saving.
 
 - **Cut**: find pauses and jump-cut them (sliders for the shortest pause,
   the breathing room kept and the threshold), or drag on the timeline and
@@ -256,6 +270,6 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 1. **Adaptive streaming**: encode a 1080/720/480/240 ladder with aligned keyframes, package as HLS/DASH.
 2. **Auto-highlights**: done for activity (loudness, motion, cuts); next, transcript-aware picks.
 3. **Subtitles**: done (Whisper → SRT/VTT, styled burn-in, editing by transcript); next, word-level timing.
-4. **Desktop editor**: clips, titles and music done; next, word-level caption timing, transitions, saving projects.
+4. **Desktop editor**: clips, titles, music, transitions, saved projects and word highlighting done; next, keyframed zoom/pan, stickers, preview of transitions.
 5. **Live recorder**: watch a channel, record when it goes live, handle stream drops.
 6. **Enhancement**: Real-ESRGAN upscaling, RIFE interpolation, Demucs stem separation.

@@ -17,7 +17,6 @@ use mx_core::analysis::{
     find_silences, measure_loudness,
 };
 use mx_core::project::{Clip, Music, Project};
-use mx_core::temp::TempFile;
 use mx_core::timeline::{self, Range};
 use mx_core::units::format_time;
 
@@ -207,7 +206,7 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
             let clips = inputs.iter().map(Clip::new).collect();
             let frame = aspect.map(|aspect| Frame { aspect, fit: fit_of(fit, 0.5), short_edge });
             let music = music.map(|source| Music { source, volume: music_volume, duck: !no_duck, ..Music::default() });
-            render_project(ctx, &Project { clips, frame, music }, &output, &encode)
+            render_project(ctx, &Project { clips, frame, music, captions: None }, &output, &encode)
         }
         Command::Render { project, output, encode } => {
             let text = std::fs::read_to_string(&project)?;
@@ -218,7 +217,7 @@ pub fn run(command: Command, ctx: &Ctx) -> Result<()> {
     }
 }
 
-/// Render `project`, with its titles drawn on top.
+/// Render `project`, with its captions and titles drawn on top.
 fn render_project(ctx: &Ctx, project: &Project, output: &Path, encode: &EncodeArgs) -> Result<()> {
     check_output(output, ctx)?;
     let first = ffmpeg::probe(&project.clips.first().ok_or_else(|| anyhow!("the project has no clips"))?.source)?;
@@ -231,20 +230,7 @@ fn render_project(ctx: &Ctx, project: &Project, output: &Path, encode: &EncodeAr
         Some((_, h)) => Some(resolve_encoder(encode, Some(h))?),
         None => None,
     };
-    let durations = project
-        .clips
-        .iter()
-        .map(|c| probe_duration(&c.source))
-        .collect::<Result<Vec<_>>>()?;
-    let titles = match (size, project.clips.iter().any(|c| !c.titles.is_empty())) {
-        (Some((w, h)), true) => {
-            let ass = mx_core::project::titles_ass(&project.clips, &project.layout(&durations), w, h);
-            Some(TempFile::with_contents("titles", "ass", &ass)?)
-        }
-        _ => None,
-    };
-    let subtitles: Vec<_> = titles.iter().map(|t| t.path().to_path_buf()).collect();
-    let render = ops::render_project(project, &subtitles, output, video)?;
+    let render = ops::render_project(project, &[], output, video)?;
     println!(
         "joining  {} clips -> {}{}",
         project.clips.len(),

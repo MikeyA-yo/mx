@@ -48,7 +48,8 @@ pub async fn transcribe(
             (false, other) => other.to_string(),
         };
         // Same file, model and language: same transcript.
-        cache::json(&format!("transcript-{}-{language}", model.name), 1, &input, || {
+        // Version 2 added word timings.
+        cache::json(&format!("transcript-{}-{language}", model.name), 2, &input, || {
             let cancel = task.cancel.clone();
             let model_path = models::ensure(model, &cancel, |done, total| {
                 let pct = total.map(|t| done as f64 / t.max(1) as f64 * 100.0);

@@ -27,11 +27,100 @@ use crate::ffmpeg::{Job, Progress, filter_path};
 use crate::temp::TempFile;
 use crate::timeline::Range;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Segment {
     pub start: f64,
     pub end: f64,
     pub text: String,
+    /// When each word is said. whisper only times whole segments, so
+    /// these are estimates (see [`estimate_words`]); empty when unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<Word>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Word {
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+}
+
+impl Segment {
+    /// This segment moved by `place`, which maps a source range to the
+    /// output ranges it plays at (none if it was cut). Words that were cut
+    /// are dropped; a segment with nothing left is `None`.
+    pub fn placed(&self, place: impl Fn(Range) -> Vec<Range>) -> Option<Segment> {
+        let span = |r: Range| {
+            let pieces = place(r);
+            Some((pieces.first()?.start, pieces.last()?.end))
+        };
+        let (start, end) = span(Range::new(self.start, self.end))?;
+        let words = self
+            .words
+            .iter()
+            .filter_map(|w| {
+                let (start, end) = span(Range::new(w.start, w.end))?;
+                Some(Word { start, end, text: w.text.clone() })
+            })
+            .collect();
+        Some(Segment { start, end, text: self.text.clone(), words })
+    }
+}
+
+/// Words of `text`, spread over `start..end` minus `pauses` (sorted).
+///
+/// Each word gets a share of the segment's *voiced* time in proportion to
+/// its length, so a pause in the middle of a sentence holds no word: the
+/// words on either side of it stay with the speech they belong to. With
+/// no pauses this is a plain share of the segment by length.
+pub fn estimate_words(start: f64, end: f64, text: &str, pauses: &[Range]) -> Vec<Word> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() || end <= start {
+        return Vec::new();
+    }
+    // The voiced stretches of the segment, in order.
+    let mut voiced = Vec::new();
+    let mut cursor = start;
+    for p in pauses.iter().filter(|p| p.end > start && p.start < end) {
+        if p.start > cursor {
+            voiced.push(Range::new(cursor, p.start));
+        }
+        cursor = cursor.max(p.end);
+    }
+    if cursor < end {
+        voiced.push(Range::new(cursor, end));
+    }
+    let total: f64 = voiced.iter().map(Range::len).sum();
+    if total < 0.05 {
+        // whisper heard words where the envelope found silence; trust the
+        // segment's own times.
+        voiced = vec![Range::new(start, end)];
+    }
+    let total: f64 = voiced.iter().map(Range::len).sum();
+    // Voiced position (0..total) -> real time. Where one stretch ends and
+    // the next begins, a word's start goes to the later (after the pause)
+    // and its end to the earlier (before it).
+    let at = |mut pos: f64, starting: bool| {
+        for v in &voiced {
+            if pos < v.len() || (!starting && pos <= v.len()) {
+                return v.start + pos;
+            }
+            pos -= v.len();
+        }
+        end
+    };
+    let weight = |w: &str| w.chars().count() as f64 + 1.0;
+    let sum: f64 = words.iter().map(|w| weight(w)).sum();
+    let mut pos = 0.0;
+    words
+        .iter()
+        .map(|w| {
+            let from = pos;
+            pos += weight(w) / sum * total;
+            let start = at(from, true);
+            Word { start, end: at(pos, false).max(start), text: w.to_string() }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -65,15 +154,7 @@ impl Transcript {
     /// segments that were cut are dropped, the rest move up to where they
     /// now play.
     pub fn retimed(&self, keep: &[Range]) -> Transcript {
-        let segments = self
-            .segments
-            .iter()
-            .filter_map(|s| {
-                let pieces = crate::timeline::map_range(keep, Range::new(s.start, s.end));
-                let (first, last) = (pieces.first()?, pieces.last()?);
-                Some(Segment { start: first.start, end: last.end, text: s.text.clone() })
-            })
-            .collect();
+        let segments = self.segments.iter().filter_map(|s| s.placed(|r| crate::timeline::map_range(keep, r))).collect();
         Transcript { segments }
     }
 }
@@ -191,7 +272,7 @@ fn map_segments<'a>(lines: impl IntoIterator<Item = &'a str>, chunks: &[Range]) 
         if text.is_empty() || start >= chunk.end - 0.05 {
             continue;
         }
-        segments.push(Segment { start, end: end.max(start), text: text.to_string() });
+        segments.push(Segment { start, end: end.max(start), text: text.to_string(), words: Vec::new() });
     }
     segments
 }
@@ -234,7 +315,13 @@ pub fn transcribe(
         }
         return Err(e);
     }
-    Ok(Transcript { segments: map_segments(lines.iter().map(String::as_str), &chunks) })
+    // Word timing: pauses as short as a breath between words count.
+    let gaps = find_silences(&envelope, &SilenceOptions { min_duration: 0.12, ..Default::default() }).silences;
+    let mut segments = map_segments(lines.iter().map(String::as_str), &chunks);
+    for s in &mut segments {
+        s.words = estimate_words(s.start, s.end, &s.text, &gaps);
+    }
+    Ok(Transcript { segments })
 }
 
 #[cfg(test)]
@@ -286,7 +373,7 @@ mod tests {
         ];
         let segments = map_segments(out, &chunks);
         assert_eq!(segments.len(), 2, "{segments:?}");
-        assert_eq!(segments[0], Segment { start: 1.75, end: 1.75 + 4.24, text: "actually remember what you've learned.".into() });
+        assert_eq!(segments[0], Segment { start: 1.75, end: 1.75 + 4.24, text: "actually remember what you've learned.".into(), words: Vec::new() });
         assert!((segments[1].start - 20.75).abs() < 1e-9 && (segments[1].end - 24.25).abs() < 1e-9);
         assert_eq!(segments[1].text, "He said \"hi\" twice.");
     }
@@ -301,7 +388,31 @@ mod tests {
     }
 
     fn seg(start: f64, end: f64, text: &str) -> Segment {
-        Segment { start, end, text: text.into() }
+        Segment { start, end, text: text.into(), words: Vec::new() }
+    }
+
+    #[test]
+    fn words_skip_the_pauses_inside_a_segment() {
+        // "aa bb" over 0-3 s with a pause at 1-2 s: each word keeps one
+        // voiced second, and the second word starts after the pause.
+        let w = estimate_words(0.0, 3.0, "aa bb", &[Range::new(1.0, 2.0)]);
+        assert_eq!(w.len(), 2);
+        assert!((w[0].start - 0.0).abs() < 1e-6 && (w[0].end - 1.0).abs() < 1e-6, "{w:?}");
+        assert!((w[1].start - 2.0).abs() < 1e-6 && (w[1].end - 3.0).abs() < 1e-6, "{w:?}");
+        // Longer words get more time.
+        let w = estimate_words(0.0, 1.0, "a bbbbbbb", &[]);
+        assert!(w[1].end - w[1].start > 3.0 * (w[0].end - w[0].start), "{w:?}");
+    }
+
+    #[test]
+    fn words_move_and_drop_with_cuts() {
+        let mut s = seg(0.0, 4.0, "one two");
+        s.words = estimate_words(0.0, 4.0, "one two", &[]);
+        // Keep 2-4: "one" (0-2) is cut, "two" moves to 0-2.
+        let r = Transcript { segments: vec![s] }.retimed(&[Range::new(2.0, 4.0)]);
+        let words = &r.segments[0].words;
+        assert_eq!(words.len(), 1);
+        assert_eq!((words[0].text.as_str(), words[0].start, words[0].end), ("two", 0.0, 2.0));
     }
 
     #[test]

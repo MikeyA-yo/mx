@@ -1,8 +1,8 @@
-// Building export requests from the editor state.
+// Building export requests and project files from the editor state.
 
-import { exportEdit, newTaskId, type ClipRequest, type ExportRequest, type Highlight, type Range } from "../api";
+import { exportEdit, newTaskId, type ExportRequest, type Highlight, type Project, type ProjectClip, type Range } from "../api";
 import { join, load, stem } from "../util";
-import type { ClipSpec, EditorApi, ProjectApi } from "./state";
+import type { ClipEditorState, ClipSpec, EditorApi, ProjectApi } from "./state";
 
 export type Format = { codec: ExportRequest["codec"]; gpu: boolean; targetMb: number | null };
 
@@ -15,24 +15,23 @@ export function outputExt(clips: ClipSpec[]): string {
   return ["mp3", "m4a", "wav", "flac"].includes(ext) ? ext : "m4a";
 }
 
-function clipRequest(spec: ClipSpec, keep: Range[] = spec.keep): ClipRequest {
-  return { source: spec.media.path, keep, volume: 1, titles: spec.titles, transcript: spec.transcript };
+function projectClip(spec: ClipSpec, keep: Range[] = spec.keep): ProjectClip {
+  return { source: spec.media.path, keep, volume: 1, titles: spec.titles, transcript: spec.transcript, transition: spec.transition };
 }
 
-/** The whole project, as one file. */
-export function projectRequest(project: ProjectApi, output: string, format: Format): ExportRequest {
+/** The project as mx-core renders it. */
+export function coreProject(project: ProjectApi): Project {
   const video = project.clips.some((c) => c.media.hasVideo);
   return {
-    clips: project.clips.map((c) => clipRequest(c)),
+    clips: project.clips.map((c) => projectClip(c)),
     frame: video ? project.frame : null,
     music: project.music,
     captions: video && project.captionsOn ? project.style : null,
-    output,
-    codec: format.codec,
-    quality: null,
-    gpu: format.gpu,
-    targetMb: format.targetMb,
   };
+}
+
+export function projectRequest(project: ProjectApi, output: string, format: Format): ExportRequest {
+  return { project: coreProject(project), output, codec: format.codec, quality: null, gpu: format.gpu, targetMb: format.targetMb };
 }
 
 /** Export each highlight of the current clip as its own file in `dir`,
@@ -48,8 +47,34 @@ export async function exportClips(ed: EditorApi, picks: Highlight[], dir: string
     const keep = ed.spec.keep
       .map((k) => ({ start: Math.max(k.start, h.range.start), end: Math.min(k.end, h.range.end) }))
       .filter((k) => k.end - k.start > 0.05);
-    const req = projectRequest({ ...ed.project, clips: [ed.spec], music: null }, join(dir, name), { ...format, targetMb: null });
-    req.clips = [clipRequest(ed.spec, keep.length ? keep : [h.range])];
+    const req = projectRequest({ ...ed.project, music: null }, join(dir, name), { ...format, targetMb: null });
+    req.project.clips = [{ ...projectClip(ed.spec, keep.length ? keep : [h.range]), transition: null }];
     await exportEdit(newTaskId(), req);
   }
+}
+
+/** A saved project: what `mx render` reads, plus each editor's state. */
+export type ProjectFile = Omit<Project, "clips"> & {
+  mx: 1;
+  clips: (ProjectClip & { editor: ClipEditorState })[];
+  editor: { captionsOn: boolean; style: ProjectApi["style"] };
+};
+
+export function projectFile(project: ProjectApi): ProjectFile {
+  const core = coreProject(project);
+  return {
+    mx: 1,
+    ...core,
+    clips: core.clips.map((c, i) => ({ ...c, editor: project.clips[i].editor })),
+    editor: { captionsOn: project.captionsOn, style: project.style },
+  };
+}
+
+/** What reopening a project needs, or an error for files that aren't one. */
+export function readProjectFile(json: unknown): ProjectFile {
+  const f = json as Partial<ProjectFile> | null;
+  if (!f || typeof f !== "object" || !Array.isArray(f.clips) || f.clips.some((c) => typeof c?.source !== "string")) {
+    throw new Error("This isn't an mx project file.");
+  }
+  return f as ProjectFile;
 }

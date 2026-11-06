@@ -22,7 +22,8 @@ use super::jumpcut::{audio_chain, parse_rate, select_expr, snap};
 use super::reframe::{Fit, filtergraph};
 use super::{VideoEncode, aac, audio_codec, finish};
 use crate::ffmpeg::{Job, Probe, filter_path, probe};
-use crate::project::{Clip, Placement, Project};
+use crate::project::{Clip, Placement, Project, length, output_transcript, titles_ass};
+use crate::speech::{cues, to_ass};
 use crate::temp::TempFile;
 use crate::timeline::{Range, total};
 
@@ -51,11 +52,13 @@ pub struct Render {
     /// frames, and its start on the output timeline.
     pub layout: Vec<Placement>,
     _script: Option<TempFile>,
+    /// Captions and titles drawn by the job.
+    _overlays: Vec<TempFile>,
 }
 
 impl Render {
     pub fn output_duration(&self) -> f64 {
-        self.layout.iter().map(Placement::duration).sum()
+        length(&self.layout)
     }
 
     /// The first (for [`render`], the only) clip's kept ranges.
@@ -94,6 +97,8 @@ struct ClipPlan {
     /// Output length of this clip.
     duration: f64,
     volume: f64,
+    /// `xfade` transition from the clip before, and how long it overlaps.
+    transition: Option<(&'static str, f64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +134,49 @@ struct Graph {
 }
 
 const AUDIO_FORMAT: &str = "aformat=sample_rates=48000:channel_layouts=stereo";
+
+/// Join clips one pair at a time: `xfade` + `acrossfade` where a clip has
+/// a transition in, a two-piece `concat` where it doesn't. `xfade` also
+/// needs both sides on the same time base and pixel format.
+fn join_with_transitions(g: &mut Graph, plan: &Plan, has_video: bool, any_audio: bool) -> (Option<String>, Option<String>) {
+    let pad = |p: &Option<String>| p.as_ref().map(|p| format!("[{p}]")).unwrap_or_default();
+    let (mut v, mut a) = (None::<String>, None::<String>);
+    let mut length = 0.0;
+    for (i, c) in plan.clips.iter().enumerate() {
+        let vi = has_video.then(|| {
+            g.parts.push(format!("[v{i}]settb=AVTB,format=yuv420p[t{i}]"));
+            format!("t{i}")
+        });
+        let ai = any_audio.then(|| format!("a{i}"));
+        if i == 0 {
+            (v, a, length) = (vi, ai, c.duration);
+            continue;
+        }
+        match c.transition {
+            Some((kind, d)) => {
+                if let (Some(prev), Some(next)) = (&v, &vi) {
+                    let at = length - d;
+                    g.parts.push(format!("[{prev}][{next}]xfade=transition={kind}:duration={d:.6}:offset={at:.6}[xv{i}]"));
+                    v = Some(format!("xv{i}"));
+                }
+                if let (Some(prev), Some(next)) = (&a, &ai) {
+                    g.parts.push(format!("[{prev}][{next}]acrossfade=d={d:.6}:c1=tri:c2=tri[xa{i}]"));
+                    a = Some(format!("xa{i}"));
+                }
+                length += c.duration - d;
+            }
+            None => {
+                let ins = format!("{}{}{}{}", pad(&v), pad(&a), pad(&vi), pad(&ai));
+                v = has_video.then(|| format!("xv{i}"));
+                a = any_audio.then(|| format!("xa{i}"));
+                let outs = format!("{}{}", pad(&v), pad(&a));
+                g.parts.push(format!("{ins}concat=n=2:v={}:a={}{outs}", usize::from(has_video), usize::from(any_audio)));
+                length += c.duration;
+            }
+        }
+    }
+    (v, a)
+}
 
 fn graph(plan: &Plan) -> Graph {
     let mut g = Graph::default();
@@ -203,12 +251,14 @@ fn graph(plan: &Plan) -> Graph {
         let v = has_video.then(|| it.next().unwrap_or_default().to_string());
         let a = any_audio.then(|| it.next().unwrap_or_default().to_string());
         (v, a)
-    } else {
+    } else if plan.clips.iter().all(|c| c.transition.is_none()) {
         let n = plan.clips.len();
         let (v, a) = (usize::from(has_video), usize::from(any_audio));
         let outs = format!("{}{}", if has_video { "[vcat]" } else { "" }, if any_audio { "[acat]" } else { "" });
         g.parts.push(format!("{}concat=n={n}:v={v}:a={a}{outs}", joined.concat()));
         (has_video.then(|| "vcat".to_string()), any_audio.then(|| "acat".to_string()))
+    } else {
+        join_with_transitions(&mut g, plan, has_video, any_audio)
     };
 
     if let Some(v) = &mut video {
@@ -219,7 +269,7 @@ fn graph(plan: &Plan) -> Graph {
     }
 
     if let Some(m) = &plan.music {
-        let total: f64 = plan.clips.iter().map(|c| c.duration).sum();
+        let total: f64 = plan.clips.iter().map(|c| c.duration - c.transition.map_or(0.0, |t| t.1)).sum();
         let fade_at = (total - m.fade_out).max(0.0);
         g.parts.push(format!(
             "[{}:a:0]{AUDIO_FORMAT},atrim=duration={total:.6},asetpts=PTS-STARTPTS,volume={:.3},\
@@ -255,15 +305,14 @@ fn graph(plan: &Plan) -> Graph {
 pub fn render(input: &Path, output: &Path, edit: &Edit, video: Option<VideoEncode>) -> Result<Render> {
     let mut clip = Clip::new(input);
     clip.keep = edit.keep.clone();
-    let project = Project { clips: vec![clip], frame: edit.frame, music: None };
+    let project = Project { clips: vec![clip], frame: edit.frame, ..Project::default() };
     let subtitles: Vec<PathBuf> = edit.subtitles.iter().cloned().collect();
     render_project(&project, &subtitles, output, video)
 }
 
-/// Render `project` to `output`, drawing `subtitles` (ASS or SRT files
-/// timed on the output, e.g. captions and [`crate::project::titles_ass`])
-/// over the picture in order. `video` is required when the clips have
-/// video.
+/// Render `project` to `output` with its captions and titles. Other
+/// `subtitles` (ASS or SRT files timed on the output) are drawn first.
+/// `video` is required when the clips have video.
 pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, video: Option<VideoEncode>) -> Result<Render> {
     if project.clips.is_empty() {
         bail!("there are no clips to render");
@@ -301,9 +350,8 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
     let fit = project.frame.map_or(Fit::Blur, |f| f.fit);
 
     let mut job = Job::new(output);
-    let mut layout = Vec::new();
+    let mut keeps = Vec::new();
     let mut clips = Vec::new();
-    let mut offset = 0.0;
     for (i, (clip, source)) in project.clips.iter().zip(&sources).enumerate() {
         let d = durations[i];
         let mut kept = if clip.keep.is_empty() { vec![Range::new(0.0, d)] } else { normalize(&clip.keep, d) };
@@ -333,9 +381,33 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
             audio: source.has_audio(),
             duration: length,
             volume: clip.volume.max(0.0),
+            transition: None,
         });
-        layout.push(Placement { offset, keep: kept });
-        offset += length;
+        keeps.push(kept);
+    }
+    let layout = project.arrange(keeps);
+    for ((plan, place), clip) in clips.iter_mut().zip(&layout).zip(&project.clips) {
+        if place.overlap > 0.0 {
+            plan.transition = clip.transition.map(|t| (t.kind.xfade(), place.overlap));
+        }
+    }
+    let duration = length(&layout);
+
+    // Captions and titles are drawn on the output, through the same
+    // placement as the clips.
+    let mut overlays = Vec::new();
+    if has_video {
+        let (w, h) = size;
+        if let Some(style) = &project.captions {
+            let transcripts: Vec<_> = project.clips.iter().map(|c| c.transcript.clone()).collect();
+            let timed = output_transcript(&layout, &transcripts);
+            if !timed.segments.is_empty() {
+                overlays.push(TempFile::with_contents("captions", "ass", &to_ass(&cues(&timed, style), w, h, style))?);
+            }
+        }
+        if project.clips.iter().any(|c| !c.titles.is_empty()) {
+            overlays.push(TempFile::with_contents("titles", "ass", &titles_ass(&project.clips, &layout, w, h))?);
+        }
     }
 
     let music = match &project.music {
@@ -356,7 +428,12 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
         None => None,
     };
 
-    let subtitles = subtitles.iter().map(|s| filter_path(s)).collect::<Result<Vec<_>>>()?;
+    let subtitles = subtitles
+        .iter()
+        .map(PathBuf::as_path)
+        .chain(overlays.iter().map(TempFile::path))
+        .map(filter_path)
+        .collect::<Result<Vec<_>>>()?;
     let plan = Plan { clips, rate, size, fit, reframe: project.frame.is_some(), subtitles, music };
     let g = graph(&plan);
 
@@ -389,11 +466,10 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
         };
     }
     // Looping music never ends by itself; the clips decide the length.
-    let duration = offset;
     if plan.music.is_some() {
         job = job.args(["-t", &format!("{duration:.6}")]);
     }
-    Ok(Render { job: finish(job.duration(duration), output), layout, _script: script })
+    Ok(Render { job: finish(job.duration(duration), output), layout, _script: script, _overlays: overlays })
 }
 
 #[cfg(test)]
@@ -407,7 +483,7 @@ mod tests {
 
     fn clip(cuts: Option<Vec<Range>>, size: (u32, u32), audio: bool) -> ClipPlan {
         let duration = cuts.as_ref().map_or(10.0, |c| total(c));
-        ClipPlan { cuts, size: Some(size), audio, duration, volume: 1.0 }
+        ClipPlan { cuts, size: Some(size), audio, duration, volume: 1.0, transition: None }
     }
 
     fn plan(clips: Vec<ClipPlan>) -> Plan {
@@ -472,6 +548,21 @@ mod tests {
         assert!(s.contains("anullsrc=r=48000:cl=stereo,atrim=duration=1.000000[a1]"), "{s}");
         assert!(s.contains("[v0][a0][v1][a1]concat=n=2:v=1:a=1[vcat][acat]"), "{s}");
         assert_eq!((g.video.as_deref(), g.audio.as_deref()), (Some("[vcat]"), Some("[acat]")));
+    }
+
+    #[test]
+    fn transitions_crossfade_pairs_and_plain_cuts_concat() {
+        let mut b = clip(None, (320, 240), true);
+        b.transition = Some(("fadeblack", 0.5));
+        let c = clip(None, (320, 240), true);
+        let g = graph(&plan(vec![clip(None, (320, 240), true), b, c]));
+        let s = g.parts.join(";\n");
+        assert!(s.contains("[v0]settb=AVTB,format=yuv420p[t0]"), "{s}");
+        // The second clip starts half a second before the first one's 10 s end.
+        assert!(s.contains("[t0][t1]xfade=transition=fadeblack:duration=0.500000:offset=9.500000[xv1]"), "{s}");
+        assert!(s.contains("[a0][a1]acrossfade=d=0.500000:c1=tri:c2=tri[xa1]"), "{s}");
+        assert!(s.contains("[xv1][xa1][t2][a2]concat=n=2:v=1:a=1[xv2][xa2]"), "{s}");
+        assert_eq!((g.video.as_deref(), g.audio.as_deref()), (Some("[xv2]"), Some("[xa2]")));
     }
 
     #[test]

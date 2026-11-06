@@ -8,4 +8,4 @@ pub mod transcribe;
 
 pub use captions::{CaptionStyle, cues, to_ass};
 pub use models::Model;
-pub use transcribe::{Segment, TranscribeOptions, Transcript, transcribe};
+pub use transcribe::{Segment, TranscribeOptions, Transcript, Word, estimate_words, transcribe};

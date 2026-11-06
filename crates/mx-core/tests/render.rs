@@ -50,9 +50,9 @@ fn renders_cuts_frame_and_captions_in_one_pass() {
     // Cut 2-4 s and 7-10 s: 5 s left, starting at 0.
     let transcript = Transcript {
         segments: vec![
-            Segment { start: 0.5, end: 1.5, text: "first".into() },
-            Segment { start: 2.0, end: 4.0, text: "cut".into() },
-            Segment { start: 5.0, end: 6.0, text: "second".into() },
+            Segment { start: 0.5, end: 1.5, text: "first".into(), words: Vec::new() },
+            Segment { start: 2.0, end: 4.0, text: "cut".into(), words: Vec::new() },
+            Segment { start: 5.0, end: 6.0, text: "second".into(), words: Vec::new() },
         ],
     };
     let keep = keep_ranges(10.0, &[Range::new(2.0, 4.0), Range::new(7.0, 10.0)], 0.0);
@@ -126,7 +126,7 @@ fn previews_mkv_by_remuxing_and_makes_a_filmstrip() {
 
 #[test]
 fn renders_a_project_of_mismatched_clips_with_music_and_a_title() {
-    use mx_core::project::{Clip, Music, Project, Title, titles_ass};
+    use mx_core::project::{Clip, Music, Project, Title};
     if version("ffmpeg").is_none() {
         return;
     }
@@ -167,13 +167,12 @@ fn renders_a_project_of_mismatched_clips_with_music_and_a_title() {
         frame: Some(Frame { aspect: Aspect { w: 9, h: 16 }, fit: Fit::Blur, short_edge: 240 }),
         // Shorter than the video: it loops.
         music: Some(Music { source: song, offset: 0.0, volume: 0.3, duck: true, fade_out: 1.0 }),
+        captions: None,
     };
-    let layout = project.layout(&[10.0, 4.0]);
-    let titles = TempFile::with_contents("test-titles", "ass", &titles_ass(&project.clips, &layout, 240, 426)).unwrap();
 
     let output = dir.join("project.mp4");
     let video = VideoEncode { encoder: Encoder::lookup("libx264").unwrap(), quality: None };
-    let job = mx_core::ffmpeg::ops::render_project(&project, &[titles.path().to_path_buf()], &output, Some(video)).unwrap();
+    let job = mx_core::ffmpeg::ops::render_project(&project, &[], &output, Some(video)).unwrap();
     assert!((job.output_duration() - 7.0).abs() < 0.05, "{}", job.output_duration());
     assert!((job.layout[1].offset - 3.0).abs() < 0.05);
     job.job.clone().overwrite(true).run(&CancelToken::new(), |_| {}).unwrap();
@@ -183,5 +182,46 @@ fn renders_a_project_of_mismatched_clips_with_music_and_a_title() {
     assert_eq!((v.width, v.height, v.fps().map(|f| f.round())), (Some(240), Some(426), Some(30.0)));
     let (vd, ad) = durations(&output);
     assert!((vd - 7.0).abs() < 0.1, "video {vd}");
+    assert!((ad - vd).abs() < 0.1, "audio {ad} vs video {vd}");
+}
+
+#[test]
+fn transitions_overlap_clips_and_captions_follow() {
+    use mx_core::project::{Clip, Project, Transition, TransitionKind};
+    use mx_core::speech::{CaptionStyle, Segment, Transcript};
+    if version("ffmpeg").is_none() {
+        return;
+    }
+    let dir = dir("transition");
+    let a = dir.join("a.mp4");
+    source(&a, &["-c:a", "aac"]);
+    let b = dir.join("b.mp4");
+    Job::new(&b)
+        .args(["-f", "lavfi", "-i", "smptebars=duration=4:size=640x360:rate=25"])
+        .args(["-f", "lavfi", "-i", "sine=frequency=880:duration=4"])
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest"])
+        .overwrite(true)
+        .run(&CancelToken::new(), |_| {})
+        .unwrap();
+
+    let mut first = Clip::new(&a);
+    first.keep = vec![Range::new(0.0, 3.0)];
+    let mut second = Clip::new(&b);
+    second.transition = Some(Transition { kind: TransitionKind::Fade, duration: 0.5 });
+    second.transcript = Some(Transcript { segments: vec![Segment { start: 1.0, end: 2.0, text: "after the fade".into(), words: Vec::new() }] });
+    let project = Project {
+        clips: vec![first, second],
+        captions: Some(CaptionStyle::for_frame(320, 240)),
+        ..Project::default()
+    };
+    let output = dir.join("out.mp4");
+    let video = VideoEncode { encoder: Encoder::lookup("libx264").unwrap(), quality: None };
+    let job = mx_core::ffmpeg::ops::render_project(&project, &[], &output, Some(video)).unwrap();
+    // 3 s + 4 s, overlapping by 0.5 s.
+    assert!((job.output_duration() - 6.5).abs() < 0.05, "{}", job.output_duration());
+    assert!((job.layout[1].offset - 2.5).abs() < 0.05);
+    job.job.clone().overwrite(true).run(&CancelToken::new(), |_| {}).unwrap();
+    let (vd, ad) = durations(&output);
+    assert!((vd - 6.5).abs() < 0.1, "video {vd}");
     assert!((ad - vd).abs() < 0.1, "audio {ad} vs video {vd}");
 }
