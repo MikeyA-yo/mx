@@ -23,7 +23,7 @@ export default function TasksPage({ onEdit }: { onEdit: (path: string) => void }
           Clear finished
         </button>
       </div>
-      {tasks.length === 0 && <p className="faint">Nothing yet.</p>}
+      {tasks.length === 0 && <p className="faint">Nothing yet. Downloads, exports and transcripts show up here while they run.</p>}
       <div className="list">
         {tasks.map((t) => (
           <div className="list-item" key={t.id}>

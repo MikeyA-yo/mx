@@ -235,6 +235,15 @@ Keys: <kbd>Space</kbd> play, <kbd>←</kbd>/<kbd>→</kbd> 1 s (<kbd>Shift</kbd>
 <kbd>,</kbd>/<kbd>.</kbd> one frame, <kbd>I</kbd>/<kbd>O</kbd> selection start/end,
 <kbd>X</kbd> cut the selection, <kbd>Ctrl+Z</kbd> undo.
 
+**Getting started.** The first launch walks through the app with a short
+guided tour, and the first video opened gets a tour of the editor (a
+spotlight on each part with a card saying what it's for). A quick-start
+checklist above the tabs ticks off the usual steps (trim, captions, text,
+shape, music, export) and opens the tab for each. **Help**, on the left,
+replays either tour, shows the keyboard shortcuts (or press <kbd>?</kbd>)
+and hides or brings back the checklist. Closing a project with unsaved
+changes asks first.
+
 Files the web view can't play (HEVC, 10-bit, mkv) get a preview: mkv is
 remuxed to mp4 in seconds; anything else becomes a 540p proxy with a
 keyframe every half second for quick scrubbing. Previews, thumbnails,

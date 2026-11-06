@@ -53,14 +53,33 @@ export default function TitlesPanel({ ed }: { ed: EditorApi }) {
                   value={t.text}
                   onChange={(e) => update(i, { text: e.target.value })}
                 />
-                <div className="row" style={{ marginBottom: 10 }}>
-                  <button className="btn small grow" onClick={() => update(i, { start: Math.min(ed.time, t.end - 0.1) })}>
+                <div className="field">
+                  <label>
+                    <span>Show for</span>
+                    <span>
+                      {(t.end - t.start).toFixed(1)} s, until {clock(t.end, true)}
+                    </span>
+                  </label>
+                  <input
+                    type="range"
+                    min={0.3}
+                    max={Math.max(0.3, Math.min(30, ed.media.duration - t.start))}
+                    step={0.1}
+                    value={t.end - t.start}
+                    onChange={(e) => update(i, { end: t.start + Number(e.target.value) })}
+                  />
+                </div>
+                <div className="row" style={{ marginBottom: 4 }}>
+                  <button className="btn small grow" onClick={() => update(i, { start: Math.min(ed.time, t.end - 0.1) })} title="It appears where the playhead is">
                     Start at playhead
                   </button>
-                  <button className="btn small grow" onClick={() => update(i, { end: Math.max(ed.time, t.start + 0.1) })}>
+                  <button className="btn small grow" onClick={() => update(i, { end: Math.max(ed.time, t.start + 0.1) })} title="It disappears where the playhead is">
                     End at playhead
                   </button>
                 </div>
+                <p className="faint" style={{ margin: "0 0 10px" }}>
+                  Move the playhead, then press a button to make the text appear or disappear there.
+                </p>
                 <div className="field">
                   <label>
                     <span>Size</span>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import {
   captionCues,
   captionDefaults,
@@ -34,6 +34,7 @@ import {
 } from "../api";
 import { TaskProgress } from "../components";
 import { BackIcon, PauseIcon, PlayIcon, ScissorsIcon } from "../icons";
+import { offerTour, startTour } from "../tour";
 import { baseName, bytes, clock, dirName, join, load, stem, store } from "../util";
 import Stage from "../editor/Stage";
 import Timeline from "../editor/Timeline";
@@ -44,6 +45,7 @@ import HighlightsPanel from "../editor/HighlightsPanel";
 import FramePanel from "../editor/FramePanel";
 import AudioPanel from "../editor/AudioPanel";
 import ExportPanel from "../editor/ExportPanel";
+import QuickStart from "../editor/QuickStart";
 import { coreProject, projectFile, readProjectFile } from "../editor/exporting";
 import {
   motionAt,
@@ -91,10 +93,12 @@ type Props = {
   request: { paths: string[]; n: number } | null;
   /** Opening from this page goes through the app, which remembers it. */
   onOpen: (paths: string[]) => void;
+  /** How many clips are open, for Help. */
+  onClips: (n: number) => void;
 };
 
 /** The project: clips in order, and what they share. */
-export default function EditorPage({ request, onOpen }: Props) {
+export default function EditorPage({ request, onOpen, onClips }: Props) {
   const [clips, setClips] = useState<ClipEntry[]>([]);
   const [transitions, setTransitions] = useState<Record<string, Transition | null>>({});
   const [projectPath, setProjectPath] = useState<string | null>(null);
@@ -122,6 +126,7 @@ export default function EditorPage({ request, onOpen }: Props) {
   useEffect(() => {
     if (request) add(request.paths);
   }, [request, add]);
+  useEffect(() => onClips(clips.length), [clips.length, onClips]);
 
   const ordered = clips
     .map((c, i): ClipSpec | undefined => specs[c.id] && { ...specs[c.id], transition: i === 0 ? null : (transitions[c.id] ?? null) })
@@ -138,7 +143,14 @@ export default function EditorPage({ request, onOpen }: Props) {
 
   const project: ProjectApi = { clips: ordered, frame, setFrame, captionsOn, setCaptionsOn, style, setStyle, music, setMusic };
 
-  const close = () => {
+  const close = async () => {
+    if (dirty) {
+      const sure = await ask(
+        projectPath ? "Close this project? Changes since you last saved will be lost." : "Close this project? It hasn't been saved, so your edits will be lost.",
+        { title: "Close project", kind: "warning", okLabel: "Close", cancelLabel: "Keep editing" },
+      );
+      if (!sure) return;
+    }
     setClips([]);
     setSpecs({});
     setTransitions({});
@@ -285,7 +297,7 @@ export default function EditorPage({ request, onOpen }: Props) {
   );
 
   const sequence = (
-    <div className="sequence">
+    <div className="sequence" data-tour="sequence">
       {clips.map((c, i) => {
         const spec = specs[c.id];
         const t = transitions[c.id] ?? null;
@@ -348,7 +360,7 @@ export default function EditorPage({ request, onOpen }: Props) {
           </div>
         );
       })}
-      <button className="btn small" onClick={async () => onOpen(await chooseMedia(true))}>
+      <button className="btn small" onClick={async () => onOpen(await chooseMedia(true))} title="Add more videos after these">
         + Add clip
       </button>
       <span className="faint" style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>
@@ -364,7 +376,7 @@ export default function EditorPage({ request, onOpen }: Props) {
         {dirty ? " •" : ""}
       </span>
       {fileError && <span className="error ellipsis">{fileError}</span>}
-      <button className="btn small" onClick={() => saveTo(projectPath)} title="Save (Ctrl+S)" disabled={!ready}>
+      <button className="btn small" onClick={() => saveTo(projectPath)} title="Save the project to edit later (Ctrl+S)" disabled={!ready} data-tour="save">
         Save
       </button>
       <button className="btn small ghost" onClick={() => saveTo(null)} title="Save as (Ctrl+Shift+S)" disabled={!ready}>
@@ -447,7 +459,7 @@ function Empty(p: { onOpen: (paths: string[]) => void; onOpenProject: (path: str
           <p className="muted" style={{ margin: "0 0 18px" }}>
             Drop files anywhere on this window, or pick some. Several files become clips in one video.
           </p>
-          <div className="row" style={{ justifyContent: "center" }}>
+          <div className="row" style={{ justifyContent: "center" }} data-tour="open">
             <button className="btn primary" onClick={async () => onOpen(await chooseMedia(true))}>
               Choose files...
             </button>
@@ -462,11 +474,35 @@ function Empty(p: { onOpen: (paths: string[]) => void; onOpenProject: (path: str
             </button>
           </div>
           {autosave && (
-            <button className="btn ghost" style={{ marginTop: 14 }} onClick={() => p.onOpenProject(null)}>
-              Restore last session
-            </button>
+            <div>
+              <button className="btn ghost" style={{ marginTop: 14 }} onClick={() => p.onOpenProject(null)}>
+                Restore last session
+              </button>
+            </div>
           )}
           {p.error && <p className="error">{p.error}</p>}
+          <ol className="how">
+            <li>
+              <strong>Open</strong> your videos
+            </li>
+            <li>
+              <strong>Edit</strong>: cut, caption, add music
+            </li>
+            <li>
+              <strong>Export</strong> the finished video
+            </li>
+          </ol>
+          <div>
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                startTour("welcome");
+              }}
+            >
+              New to mx? Take the one-minute tour
+            </a>
+          </div>
         </div>
         {recent.length > 0 && (
           <div className="recent">
@@ -544,6 +580,7 @@ function Workspace(p: WorkspaceProps) {
   const layerEls = useRef<(HTMLDivElement | null)[]>([]);
   const [plan, setPlan] = useState<EditPlan>({ cuts: [], keep: [], outputDuration: 0 });
   const [cues, setCues] = useState<Segment[]>([]);
+  const [exported, setExported] = useState(false);
 
   // Undo covers the edits made by hand: cuts, deleted lines and titles.
   type Snapshot = { manualCuts: Range[]; removed: number[]; titles: Title[] };
@@ -560,6 +597,11 @@ function Workspace(p: WorkspaceProps) {
       setTitles(last.titles);
     }
   };
+
+  // The editor's tour, the first time a video is ready to play.
+  useEffect(() => {
+    if (src && p.active) setTimeout(() => offerTour("editor"), 600);
+  }, [!!src, p.active]);
 
   // Load: probe first, then preview, filmstrip and waveform side by side.
   useEffect(() => {
@@ -852,6 +894,7 @@ function Workspace(p: WorkspaceProps) {
           setSkipCuts,
           project,
           spec,
+          onExported: () => setExported(true),
         }
       : null;
 
@@ -888,14 +931,23 @@ function Workspace(p: WorkspaceProps) {
       ? { aspect: { w: first.width, h: first.height }, fit: { kind: "blur" }, short_edge: Math.min(first.width, first.height) }
       : null);
 
-  const tabs: [Tab, string, boolean][] = [
-    ["cut", "Cut", plan.cuts.length > 0],
-    ["text", "Text", !!transcript],
-    ["titles", "Layers", titles.length > 0 || overlays.length > 0],
-    ["highlights", "Picks", !!highlights?.length],
-    ["frame", "Frame", !!project.frame || motion.length > 0],
-    ["audio", "Audio", !!project.music || sounds.length > 0 || volume !== 1],
-    ["export", "Export", false],
+  const tabs: [Tab, string, boolean, string][] = [
+    ["cut", "Cut", plan.cuts.length > 0, "Remove pauses and parts you don't want"],
+    ["text", "Text", !!transcript, "Captions from what's said"],
+    ["titles", "Layers", titles.length > 0 || overlays.length > 0, "Text and videos over the picture"],
+    ["highlights", "Picks", !!highlights?.length, "Find the liveliest moments"],
+    ["frame", "Frame", !!project.frame || motion.length > 0, "Shape (9:16, square...) and zoom"],
+    ["audio", "Audio", !!project.music || sounds.length > 0 || volume !== 1, "Music, sounds and volume"],
+    ["export", "Export", false, "Save the finished video"],
+  ];
+  const anyClip = (has: (c: ClipSpec) => boolean) => project.clips.some(has);
+  const quickSteps = [
+    { tab: "cut", label: "Trim it", hint: "cut pauses or parts", done: anyClip((c) => c.outputDuration < c.media.duration - 0.05) },
+    { tab: "text", label: "Add captions", hint: "or skip it", done: anyClip((c) => !!c.transcript) },
+    { tab: "titles", label: "Add text or b-roll", hint: "over the picture", done: anyClip((c) => c.titles.length > 0 || c.overlays.length > 0) },
+    { tab: "frame", label: "Pick a shape", hint: "9:16 for TikTok", done: !!project.frame },
+    { tab: "audio", label: "Add music", hint: "or sound effects", done: !!project.music || anyClip((c) => c.sounds.length > 0) },
+    { tab: "export", label: "Export", hint: "save the video", done: exported },
   ];
 
   return (
@@ -924,7 +976,7 @@ function Workspace(p: WorkspaceProps) {
         {p.toolbar}
       </div>
 
-      <div className="stage">
+      <div className="stage" data-tour="stage">
         {src ? (
           <Stage
             src={src}
@@ -960,7 +1012,7 @@ function Workspace(p: WorkspaceProps) {
           <audio key={`${k}-${s.src}`} ref={(el) => void (soundEls.current[k] = el)} src={convertFileSrc(s.src)} preload="auto" />
         ))}
         <div className="transport">
-          <button className="icon-btn big" onClick={togglePlay} title="Play/pause (Space)">
+          <button className="icon-btn big" onClick={togglePlay} title="Play/pause (Space)" data-tour="play">
             {playing ? <PauseIcon /> : <PlayIcon />}
           </button>
           <span className="time">
@@ -974,20 +1026,34 @@ function Workspace(p: WorkspaceProps) {
             )}
           </span>
           <span className="grow" />
-          {selection && (
-            <span className="muted mono">
-              {clock(selection.start, true)}–{clock(selection.end, true)}
+          {selection ? (
+            <span className="muted mono" title="Press X to cut it out, Esc to clear">
+              {clock(selection.start, true)}–{clock(selection.end, true)} selected
             </span>
+          ) : (
+            <span className="faint ellipsis">Click the timeline to jump · drag across it to select</span>
           )}
-          <span className="faint">Zoom</span>
-          <input type="range" min={1} max={40} step={0.5} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} style={{ width: 110 }} />
+          <span className="faint" style={{ whiteSpace: "nowrap" }}>
+            Timeline zoom
+          </span>
+          <input
+            type="range"
+            min={1}
+            max={40}
+            step={0.5}
+            value={zoom}
+            onChange={(e) => setZoom(Number(e.target.value))}
+            style={{ width: 110 }}
+            title="Stretch the timeline to cut more precisely"
+          />
         </div>
       </div>
 
       <aside className="side">
+        <QuickStart steps={quickSteps} tab={tab} onTab={(t) => setTab(t as Tab)} />
         <div className="tabs">
-          {tabs.map(([id, label, on]) => (
-            <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
+          {tabs.map(([id, label, on, hint]) => (
+            <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)} title={hint} data-tour={`tab-${id}`}>
               {label}
               {on && <span className="dot" />}
             </button>
@@ -1004,27 +1070,29 @@ function Workspace(p: WorkspaceProps) {
 
       <div className="timeline">
         {p.sequence}
-        <Timeline
-          duration={media.duration}
-          time={time}
-          playing={playing}
-          strip={strip}
-          wave={wave}
-          cuts={plan.cuts}
-          selection={selection}
-          highlights={highlights ?? []}
-          titles={titles}
-          keyframes={motion.map((k) => k.time)}
-          sounds={sounds.map((s) => ({ start: s.at, end: s.at + (s.duration ?? 0) }))}
-          overlays={overlays.map((o) => ({ start: o.at, end: o.at + (o.duration ?? 0) }))}
-          zoom={zoom}
-          onSeek={seek}
-          onSelect={setSelection}
-          onPickTitle={(i) => {
-            setSelectedTitle(i);
-            setTab("titles");
-          }}
-        />
+        <div data-tour="timeline">
+          <Timeline
+            duration={media.duration}
+            time={time}
+            playing={playing}
+            strip={strip}
+            wave={wave}
+            cuts={plan.cuts}
+            selection={selection}
+            highlights={highlights ?? []}
+            titles={titles}
+            keyframes={motion.map((k) => k.time)}
+            sounds={sounds.map((s) => ({ start: s.at, end: s.at + (s.duration ?? 0) }))}
+            overlays={overlays.map((o) => ({ start: o.at, end: o.at + (o.duration ?? 0) }))}
+            zoom={zoom}
+            onSeek={seek}
+            onSelect={setSelection}
+            onPickTitle={(i) => {
+              setSelectedTitle(i);
+              setTab("titles");
+            }}
+          />
+        </div>
       </div>
     </div>
   );

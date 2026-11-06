@@ -25,6 +25,7 @@ export default function ExportPanel({ ed }: { ed: EditorApi }) {
     setResult(null);
     try {
       setResult(await work(id));
+      ed.onExported();
     } catch (e) {
       if (!isCancelled(e)) setError(errorText(e));
     } finally {

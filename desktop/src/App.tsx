@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { startupFiles } from "./api";
-import { DownloadIcon, EditIcon, SetupIcon, TasksIcon } from "./icons";
+import { DownloadIcon, EditIcon, HelpIcon, SetupIcon, TasksIcon } from "./icons";
 import { useTasks } from "./tasks";
+import { HelpMenu, TourHost, offerTour, showShortcuts } from "./tour";
 import { rememberRecent } from "./util";
 import DownloadPage from "./pages/Download";
 import EditorPage from "./pages/Editor";
@@ -15,6 +16,8 @@ export default function App() {
   const [page, setPage] = useState<Page>("editor");
   const [request, setRequest] = useState<{ paths: string[]; n: number } | null>(null);
   const running = useTasks().filter((t) => t.status === "running").length;
+  const [help, setHelp] = useState(false);
+  const [clipCount, setClipCount] = useState(0);
 
   const openInEditor = (paths: string[]) => {
     if (paths.length === 0) return;
@@ -29,7 +32,22 @@ export default function App() {
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    startupFiles().then(openInEditor);
+    startupFiles().then((paths) => {
+      openInEditor(paths);
+      // A first launch with nothing open starts with the welcome tour;
+      // opening a video brings the editor's own.
+      if (paths.length === 0) setTimeout(() => offerTour("welcome"), 400);
+    });
+  }, []);
+
+  // "?" shows the shortcuts, unless it's being typed.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (e.key === "?" && !["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) showShortcuts(true);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, []);
 
   // Dropping files anywhere on the window adds them as clips.
@@ -53,13 +71,17 @@ export default function App() {
       <nav className="rail">
         <div className="logo">mx</div>
         {nav.map(([id, label, icon]) => (
-          <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}>
+          <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)} data-tour={`nav-${id}`}>
             {icon}
             {label}
             {id === "tasks" && running > 0 && <span className="badge">{running}</span>}
           </button>
         ))}
         <div className="spacer" />
+        <button className={help ? "active" : ""} onClick={() => setHelp(!help)} data-tour="help" title="Tours and shortcuts">
+          <HelpIcon />
+          Help
+        </button>
         <button className={page === "setup" ? "active" : ""} onClick={() => setPage("setup")}>
           <SetupIcon />
           Setup
@@ -68,12 +90,20 @@ export default function App() {
       <main>
         {/* The editor stays mounted so switching pages keeps its work. */}
         <div style={{ display: page === "editor" ? "contents" : "none" }}>
-          <EditorPage request={request} onOpen={openInEditor} />
+          <EditorPage request={request} onOpen={openInEditor} onClips={setClipCount} />
         </div>
         {page === "download" && <DownloadPage onEdit={openOne} />}
         {page === "tasks" && <TasksPage onEdit={openOne} />}
         {page === "setup" && <SetupPage />}
       </main>
+      {help && (
+        <HelpMenu
+          onClose={() => setHelp(false)}
+          canTourEditor={clipCount > 0}
+          onTour={() => setPage("editor")}
+        />
+      )}
+      <TourHost />
     </div>
   );
 }

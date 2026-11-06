@@ -133,6 +133,8 @@ export type EditorApi = {
   project: ProjectApi;
   /** This clip's spec, as the export sees it. */
   spec: ClipSpec;
+  /** An export finished, for the quick-start checklist. */
+  onExported: () => void;
 };
 
 /** Output frame size: the project frame, else the first clip's. */

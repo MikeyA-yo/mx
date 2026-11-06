@@ -55,3 +55,10 @@ export const MusicIcon = svg(
     <circle cx="17" cy="16" r="3" />
   </>,
 );
+export const HelpIcon = svg(
+  <>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.7" />
+    <path d="M12 17h.01" />
+  </>,
+);

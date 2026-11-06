@@ -303,6 +303,11 @@ input[type="range"] {
   display: flex;
   justify-content: space-between;
 }
+.field > label.toggle {
+  justify-content: flex-start;
+  color: var(--text);
+  font-size: inherit;
+}
 
 .card {
   background: var(--panel);
@@ -936,6 +941,10 @@ kbd {
   font-size: 12px;
   padding-left: 2px;
   padding-right: 2px;
+  white-space: nowrap;
+}
+.tabs .dot {
+  margin-left: 3px;
 }
 .mark-title {
   position: absolute;
@@ -1042,4 +1051,178 @@ kbd {
   background: #4dd9ff;
   opacity: 0.9;
   pointer-events: none;
+}
+
+/* Guides */
+
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+.tour-block {
+  position: absolute;
+  inset: 0;
+}
+.tour-spot {
+  position: fixed;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 0 9999px rgba(4, 5, 8, 0.68);
+  transition:
+    left 0.25s ease,
+    top 0.25s ease,
+    width 0.25s ease,
+    height 0.25s ease;
+  pointer-events: none;
+}
+.tour-card {
+  position: fixed;
+  width: 320px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 16px 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  transition:
+    left 0.25s ease,
+    top 0.25s ease;
+}
+.tour-card h2 {
+  font-size: 16px;
+  margin: 2px 0 6px;
+}
+.tour-card p {
+  color: var(--muted);
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+.tour-count {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+.help-menu {
+  position: fixed;
+  left: 70px;
+  bottom: 70px;
+  z-index: 21;
+  width: 280px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.help-menu button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  border: 0;
+  background: none;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.help-menu button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.help-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.help-menu .faint {
+  font-size: 11.5px;
+}
+
+.quick-start {
+  margin: 10px 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+.qs-head {
+  cursor: pointer;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.qs-head .faint {
+  font-size: 11.5px;
+}
+.qs-close {
+  border: 0;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+}
+.qs-close:hover {
+  color: var(--text);
+}
+.qs-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: none;
+  text-align: left;
+  padding: 3px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.qs-step:hover {
+  background: var(--hover);
+}
+.qs-step.here {
+  background: var(--accent-soft);
+}
+.qs-mark {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.qs-step.done .qs-mark {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #06140d;
+  font-weight: 700;
+}
+.qs-step.done > .grow {
+  color: var(--muted);
+}
+
+ol.how {
+  text-align: left;
+  width: fit-content;
+  margin: 22px auto 14px;
+  padding-left: 22px;
+  color: var(--muted);
+  line-height: 1.9;
+}
+ol.how strong {
+  color: var(--text);
+}
+a {
+  color: #a48bff;
 }
