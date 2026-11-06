@@ -220,7 +220,15 @@ session back if the window was closed without saving.
   keyframes of zoom and position, eased between (a `scale` evaluated per
   frame, then a `crop` that follows the keyframed point).
 - **Audio**: each clip's own sound from muted to 200% (turn it down
-  under a voiceover, mute it for b-roll). **Sounds** (a voiceover, an
+  under a voiceover, mute it for b-roll). **Background noise** reduction per
+  clip: *Light* plays a pause from the recording (found by the loudness
+  analysis) to an FFT denoiser (`afftdn`) first, so it knows the room's
+  hum before the clip starts, and takes about 10 dB off it with the voice
+  untouched; *Strong* runs RNNoise (`arnndn`, with the speech model
+  `sh.rnnn` built into mx, from GregorR/rnnoise-models), about 25 dB off,
+  made for talking (music in the clip goes too). Both run before cuts and
+  start with an 80 Hz high-pass. "Listen" renders six seconds before and
+  after to compare. **Sounds** (a voiceover, an
   effect) start at a moment of a clip and play to their own end, over the
   clips after it, with their own volume, fades and in/out points in the
   file; anchored to a clip, they stay in sync when clips move or are

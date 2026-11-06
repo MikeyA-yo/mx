@@ -6,6 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { errorText, probeMedia, type Sound } from "../api";
 import { baseName, clock, dirName } from "../util";
 import MusicPanel from "./MusicPanel";
+import NoisePanel from "./NoisePanel";
 import { rememberLength } from "./lengths";
 import { useOpenCard, type EditorApi } from "./state";
 
@@ -67,6 +68,7 @@ export default function AudioPanel({ ed }: { ed: EditorApi }) {
             </div>
             <span className="faint">Turn it down under a voiceover, or mute it for b-roll.</span>
           </div>
+          <NoisePanel ed={ed} />
         </>
       )}
 

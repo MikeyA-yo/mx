@@ -40,6 +40,9 @@ pub struct Clip {
     /// 1.0 leaves the clip's own sound as it is; 0 mutes it.
     #[serde(default = "one")]
     pub volume: f64,
+    /// Background noise reduction on the clip's own sound.
+    #[serde(default)]
+    pub denoise: Denoise,
     /// Text on screen, timed on this clip's source.
     #[serde(default)]
     pub titles: Vec<Title>,
@@ -59,6 +62,20 @@ pub struct Clip {
     /// while the clip's voice carries on, or a picture-in-picture.
     #[serde(default)]
     pub overlays: Vec<Overlay>,
+}
+
+/// How much background noise to take out of a clip's sound: see
+/// [`crate::ffmpeg::ops::denoise`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Denoise {
+    #[default]
+    Off,
+    /// Learns the noise from a pause and takes some of it away; the voice
+    /// stays natural.
+    Light,
+    /// A speech-trained neural network: much quieter background.
+    Strong,
 }
 
 /// A video laid over the main picture, started at a moment of a clip and
@@ -148,6 +165,7 @@ impl Clip {
             source: source.into(),
             keep: Vec::new(),
             volume: 1.0,
+            denoise: Denoise::Off,
             titles: Vec::new(),
             transcript: None,
             transition: None,

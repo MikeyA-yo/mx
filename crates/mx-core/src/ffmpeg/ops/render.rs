@@ -22,7 +22,8 @@ use super::jumpcut::{audio_chain, parse_rate, select_expr, snap};
 use super::reframe::{Fit, filtergraph};
 use super::{VideoEncode, aac, audio_codec, finish};
 use crate::ffmpeg::{Job, Probe, filter_path, probe};
-use crate::project::{Clip, Keyframe, Placement, Project, length, output_transcript, titles_ass};
+use super::denoise::{Denoiser, quiet_stretch};
+use crate::project::{Clip, Denoise, Keyframe, Placement, Project, length, output_transcript, titles_ass};
 use crate::speech::{cues, to_ass};
 use crate::temp::TempFile;
 use crate::timeline::{Range, total};
@@ -97,6 +98,9 @@ struct ClipPlan {
     /// Output length of this clip.
     duration: f64,
     volume: f64,
+    /// Noise reduction for its sound, run before anything is cut, and the
+    /// input holding the pause it learns from, when it learns from one.
+    denoise: Option<(Denoiser, Option<usize>)>,
     /// `xfade` transition from the clip before, and how long it overlaps.
     transition: Option<(&'static str, f64)>,
     /// Zoom/pan filters, run first on the clip's picture.
@@ -247,9 +251,15 @@ fn graph(plan: &Plan) -> Graph {
         }
         if any_audio {
             let gain = if (c.volume - 1.0).abs() > 1e-6 { format!(",volume={:.3}", c.volume) } else { String::new() };
+            let mut source = format!("{i}:a:0");
+            if let (Some((d, pause)), true) = (&c.denoise, c.audio) {
+                let pause = pause.map(|n| format!("{n}:a:0"));
+                g.parts.push(d.graph(&source, pause.as_deref(), &format!("dn{i}")));
+                source = format!("dn{i}");
+            }
             let pad = match (&c.cuts, c.audio) {
                 (Some(cuts), true) => {
-                    g.parts.push(audio_chain(&format!("{i}:a:0"), &format!("c{i}"), cuts, &format!("ac{i}")));
+                    g.parts.push(audio_chain(&source, &format!("c{i}"), cuts, &format!("ac{i}")));
                     if single && gain.is_empty() {
                         format!("ac{i}")
                     } else {
@@ -257,9 +267,9 @@ fn graph(plan: &Plan) -> Graph {
                         format!("a{i}")
                     }
                 }
-                (None, true) if single && gain.is_empty() => format!("{i}:a:0"),
+                (None, true) if single && gain.is_empty() => source,
                 (None, true) => {
-                    g.parts.push(format!("[{i}:a:0]{AUDIO_FORMAT},asetpts=PTS-STARTPTS{gain}[a{i}]"));
+                    g.parts.push(format!("[{source}]{AUDIO_FORMAT},asetpts=PTS-STARTPTS{gain}[a{i}]"));
                     format!("a{i}")
                 }
                 // A silent clip between ones with sound still needs its
@@ -480,6 +490,8 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
     let mut job = Job::new(output);
     let mut keeps = Vec::new();
     let mut clips = Vec::new();
+    // Pauses to learn background noise from, by clip.
+    let mut pauses = Vec::new();
     for (i, (clip, source)) in project.clips.iter().zip(&sources).enumerate() {
         let d = durations[i];
         let mut kept = if clip.keep.is_empty() { vec![Range::new(0.0, d)] } else { normalize(&clip.keep, d) };
@@ -509,6 +521,19 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
             audio: source.has_audio(),
             duration: length,
             volume: clip.volume.max(0.0),
+            denoise: match (clip.denoise, source.has_audio()) {
+                (Denoise::Off, _) | (_, false) => None,
+                (d, true) => {
+                    // Light learns from a pause anywhere in the file, cut
+                    // or not: it's fed in as an input of its own, below.
+                    let quiet = if d == Denoise::Light { quiet_stretch(&clip.source)? } else { None };
+                    let denoiser = Denoiser::new(d, quiet.map(|q| q.end - q.start))?;
+                    if let (Some(q), Some(true)) = (quiet, denoiser.as_ref().map(Denoiser::wants_pause)) {
+                        pauses.push((clips.len(), q));
+                    }
+                    denoiser.map(|d| (d, None))
+                }
+            },
             transition: None,
             motion: match (source.video().and_then(|v| v.width.zip(v.height)), clip.motion.is_empty()) {
                 (Some(size), false) => motion_filters(&clip.motion, size, seek),
@@ -623,6 +648,15 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
         }
     }
 
+    // The pauses noise reduction learns from, each a short input of its own.
+    for (i, q) in pauses {
+        let input;
+        (job, input) = add_input(job, &project.clips[i].source, q.start, q.end - q.start);
+        if let Some((_, pause)) = &mut clips[i].denoise {
+            *pause = Some(input);
+        }
+    }
+
     let subtitles = subtitles
         .iter()
         .map(PathBuf::as_path)
@@ -678,7 +712,7 @@ mod tests {
 
     fn clip(cuts: Option<Vec<Range>>, size: (u32, u32), audio: bool) -> ClipPlan {
         let duration = cuts.as_ref().map_or(10.0, |c| total(c));
-        ClipPlan { cuts, size: Some(size), audio, duration, volume: 1.0, transition: None, motion: None }
+        ClipPlan { cuts, size: Some(size), audio, duration, volume: 1.0, denoise: None, transition: None, motion: None }
     }
 
     fn plan(clips: Vec<ClipPlan>) -> Plan {

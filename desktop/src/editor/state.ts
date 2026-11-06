@@ -7,6 +7,7 @@
 import { useEffect } from "react";
 import type {
   CaptionStyle,
+  Denoise,
   EditPlan,
   Filmstrip,
   Frame,
@@ -60,6 +61,7 @@ export type ClipSpec = {
   motion: Keyframe[];
   /** The clip's own sound level: 0 mutes, 1 as recorded. */
   volume: number;
+  denoise: Denoise;
   sounds: Sound[];
   overlays: Overlay[];
   editor: ClipEditorState;
@@ -162,6 +164,8 @@ export type EditorApi = {
 
   volume: number;
   setVolume: (v: number) => void;
+  denoise: Denoise;
+  setDenoise: (d: Denoise) => void;
   sounds: Sound[];
   setSounds: (s: Sound[]) => void;
   overlays: Overlay[];

@@ -198,10 +198,14 @@ export type Overlay = {
 };
 
 /** One clip, as mx-core's renderer (and `mx render`) reads it. */
+/** Background noise reduction on a clip's own sound. */
+export type Denoise = "off" | "light" | "strong";
+
 export type ProjectClip = {
   source: string;
   keep: Range[];
   volume: number;
+  denoise?: Denoise;
   titles: Title[];
   /** Source-timed, without the lines deleted in the editor. */
   transcript: Transcript | null;
@@ -231,6 +235,11 @@ export const exportEdit = (taskId: string, req: ExportRequest) => invoke<Exporte
 /** Render the join into clip `index` at 360p; resolves to the file. */
 export const previewTransition = (taskId: string, project: Project, index: number) =>
   invoke<string>("preview_transition", { taskId, project, index });
+
+export type DenoisePreview = { before: string; after: string };
+/** A few seconds from `start`, as recorded and cleaned, to compare. */
+export const previewDenoise = (taskId: string, path: string, start: number, denoise: Denoise) =>
+  invoke<DenoisePreview>("preview_denoise", { taskId, path, start, denoise });
 
 export type GifRequest = { input: string; output: string; start: number; end: number; fps: number; width: number };
 export const exportGif = (taskId: string, req: GifRequest) => invoke<Exported>("export_gif", { taskId, req });

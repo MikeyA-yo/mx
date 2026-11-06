@@ -337,3 +337,50 @@ fn overlays_cover_or_box_the_picture_while_the_voice_carries_on() {
     // The main clip's tone plays straight through the cutaway.
     assert!(level(&output, 2.5, 4.5) > -30.0, "{}", level(&output, 2.5, 4.5));
 }
+
+#[test]
+fn noise_reduction_quiets_the_background_and_keeps_the_voice() {
+    use mx_core::project::{Clip, Denoise, Project};
+    if version("ffmpeg").is_none() || !mx_core::ffmpeg::has_filter("arnndn") {
+        return;
+    }
+    let dir = dir("denoise");
+    // 8 s of steady pink noise (a fan), with a loud tone from 3 to 6 s
+    // standing in for a voice: the stretches either side are the pauses.
+    let input = dir.join("noisy.mp4");
+    Job::new(&input)
+        .args(["-f", "lavfi", "-i", "smptebars=duration=8:size=320x240:rate=30"])
+        .args(["-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.05:duration=8:sample_rate=48000"])
+        .args(["-f", "lavfi", "-i", "sine=frequency=330:duration=8:sample_rate=48000,volume=0.3,volume=volume=0:enable='not(between(t,3,6))'"])
+        .args(["-filter_complex", "[1:a][2:a]amix=inputs=2:normalize=0[a]", "-map", "0:v", "-map", "[a]"])
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-b:a", "192k"])
+        .overwrite(true)
+        .run(&CancelToken::new(), |_| {})
+        .unwrap();
+
+    let render_with = |denoise: Denoise, name: &str| {
+        // The first half second is cut, so the input is seeked: the pause
+        // Light learns from has to be found in the seeked input's time.
+        let mut clip = Clip::new(&input);
+        clip.keep = vec![Range::new(0.5, 8.0)];
+        clip.denoise = denoise;
+        let project = Project { clips: vec![clip], ..Project::default() };
+        let output = dir.join(name);
+        let video = VideoEncode { encoder: Encoder::lookup("libx264").unwrap(), quality: None };
+        let job = mx_core::ffmpeg::ops::render_project(&project, &[], &output, Some(video)).unwrap();
+        job.job.clone().overwrite(true).run(&CancelToken::new(), |_| {}).unwrap();
+        output
+    };
+    let off = render_with(Denoise::Off, "off.mp4");
+    let light = render_with(Denoise::Light, "light.mp4");
+    let strong = render_with(Denoise::Strong, "strong.mp4");
+
+    // Output time: the noise alone until 2.5 s, the tone from 2.5 to 5.5 s.
+    let noise = |p: &Path| level(p, 0.5, 2.0);
+    let tone = |p: &Path| level(p, 3.0, 5.0);
+    assert!(noise(&light) < noise(&off) - 5.0, "light {} vs off {}", noise(&light), noise(&off));
+    assert!(noise(&strong) < noise(&off) - 10.0, "strong {} vs off {}", noise(&strong), noise(&off));
+    assert!((tone(&light) - tone(&off)).abs() < 2.0, "light tone {} vs off {}", tone(&light), tone(&off));
+    let (vd, ad) = durations(&strong);
+    assert!((vd - 7.5).abs() < 0.1 && (ad - vd).abs() < 0.1, "video {vd}, audio {ad}");
+}

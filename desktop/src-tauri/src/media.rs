@@ -10,6 +10,7 @@ use mx_core::analysis::{
 use mx_core::cache;
 use mx_core::ffmpeg::ops::{self, PreviewKind};
 use mx_core::ffmpeg::probe;
+use mx_core::project::Denoise;
 use mx_core::speech::{self, CaptionStyle, Segment, Transcript};
 use mx_core::timeline::{Range, keep_ranges, total};
 use serde::{Deserialize, Serialize};
@@ -239,4 +240,42 @@ pub fn caption_defaults(width: u32, height: u32) -> CaptionStyle {
 pub fn caption_cues(transcript: Transcript, style: CaptionStyle, keep: Vec<Range>) -> Vec<Segment> {
     let timed = if keep.is_empty() { transcript } else { transcript.retimed(&keep) };
     speech::cues(&timed, &style)
+}
+
+/// How much of a clip the noise reduction preview plays.
+const DENOISE_PREVIEW_SECS: f64 = 6.0;
+
+#[derive(Debug, Serialize)]
+pub struct DenoisePreview {
+    before: String,
+    after: String,
+}
+
+/// A few seconds of `path` from `start`, as recorded and with `denoise`,
+/// to hear the difference.
+#[tauri::command]
+pub async fn preview_denoise(app: AppHandle, task_id: String, path: String, start: f64, denoise: Denoise) -> Result<DenoisePreview, String> {
+    let input = PathBuf::from(&path);
+    let title = format!("Previewing noise reduction on {}", file_name(&input));
+    tasks::run(app, task_id, "preview", title, move |task| {
+        let duration = probe(&input)?.duration_secs().unwrap_or(0.0);
+        let length = DENOISE_PREVIEW_SECS.min(duration);
+        let start = start.clamp(0.0, (duration - length).max(0.0));
+        let dir = cache::dir();
+        std::fs::create_dir_all(&dir)?;
+        // Only the latest pair is kept; a new name each time, so the web
+        // view doesn't replay a cached one.
+        for entry in std::fs::read_dir(&dir)?.flatten() {
+            if entry.file_name().to_string_lossy().starts_with("denoise-preview-") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+        let before = dir.join(format!("denoise-preview-{stamp}-before.wav"));
+        let after = dir.join(format!("denoise-preview-{stamp}-after.wav"));
+        task.progress("cleaning the sound", None, None);
+        ops::denoise::preview(&input, start, length, denoise, &before, &after, &task.cancel)?;
+        Ok(DenoisePreview { before: before.display().to_string(), after: after.display().to_string() })
+    })
+    .await
 }

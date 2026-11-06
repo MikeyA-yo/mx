@@ -16,6 +16,7 @@ import {
   saveProject,
   waveform,
   type CaptionStyle,
+  type Denoise,
   type EditPlan,
   type Filmstrip,
   type Frame,
@@ -120,7 +121,15 @@ type VideoTimeline = {
 };
 
 /** A clip in the project; `initial` restores a saved editor. */
-type Saved = { editor: ClipEditorState; titles: Title[]; motion: Keyframe[]; volume: number; sounds: Sound[]; overlays: Overlay[] };
+type Saved = {
+  editor: ClipEditorState;
+  titles: Title[];
+  motion: Keyframe[];
+  volume: number;
+  denoise: Denoise;
+  sounds: Sound[];
+  overlays: Overlay[];
+};
 type ClipEntry = { id: string; path: string; initial?: Saved };
 
 type Props = {
@@ -173,7 +182,15 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   const lastSaved = useRef<Record<string, Saved>>({});
   useEffect(() => {
     for (const s of Object.values(specs)) {
-      lastSaved.current[s.id] = { editor: s.editor, titles: s.titles, motion: s.motion, volume: s.volume, sounds: s.sounds, overlays: s.overlays };
+      lastSaved.current[s.id] = {
+        editor: s.editor,
+        titles: s.titles,
+        motion: s.motion,
+        volume: s.volume,
+        denoise: s.denoise,
+        sounds: s.sounds,
+        overlays: s.overlays,
+      };
     }
   }, [specs]);
   const restoreClips = (list: ClipEntry[]) => {
@@ -315,7 +332,15 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
       const entries = f.clips.map((c) => ({
         id: newTaskId(),
         path: c.source,
-        initial: { editor: c.editor, titles: c.titles ?? [], motion: c.motion ?? [], volume: c.volume ?? 1, sounds: c.sounds ?? [], overlays: c.overlays ?? [] },
+        initial: {
+          editor: c.editor,
+          titles: c.titles ?? [],
+          motion: c.motion ?? [],
+          volume: c.volume ?? 1,
+          denoise: c.denoise ?? "off",
+          sounds: c.sounds ?? [],
+          overlays: c.overlays ?? [],
+        },
       }));
       setClips(entries);
       setSpecs({});
@@ -921,6 +946,7 @@ function Workspace(p: WorkspaceProps) {
   const [skipCuts, setSkipCuts] = useState(saved?.skipCuts ?? true);
   const [motion, setMotion] = useState<Keyframe[]>(p.initial?.motion ?? []);
   const [volume, setVolume] = useState(p.initial?.volume ?? 1);
+  const [denoise, setDenoise] = useState<Denoise>(p.initial?.denoise ?? "off");
   const [sounds, setSounds] = useState<Sound[]>(p.initial?.sounds ?? []);
   const soundEls = useRef<(HTMLAudioElement | null)[]>([]);
   const [overlays, setOverlays] = useState<Overlay[]>(p.initial?.overlays ?? []);
@@ -946,6 +972,7 @@ function Workspace(p: WorkspaceProps) {
     sounds: track("sounds", sounds, setSounds),
     motion: track("motion", motion, setMotion),
     volume: track("volume", volume, setVolume),
+    denoise: track("denoise", denoise, setDenoise),
     removePauses: track("removePauses", removePauses, setRemovePauses),
     padding: track("padding", padding, setPadding),
   };
@@ -960,6 +987,7 @@ function Workspace(p: WorkspaceProps) {
         sounds: setSounds,
         motion: setMotion,
         volume: setVolume,
+        denoise: setDenoise,
         removePauses: setRemovePauses,
         padding: setPadding,
         // Not an edit: lets the whole-video timeline pick this clip's layers.
@@ -1097,11 +1125,12 @@ function Workspace(p: WorkspaceProps) {
         transition: null,
         motion,
         volume,
+        denoise,
         sounds,
         overlays,
         editor: { pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts },
       },
-    [media, plan, keptTranscript, titles, motion, volume, sounds, overlays, p.id, pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts],
+    [media, plan, keptTranscript, titles, motion, volume, denoise, sounds, overlays, p.id, pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts],
   );
   const onSpec = p.onSpec;
   useEffect(() => {
@@ -1345,6 +1374,8 @@ function Workspace(p: WorkspaceProps) {
           setMotion: edit.motion,
           volume,
           setVolume: edit.volume,
+          denoise,
+          setDenoise: edit.denoise,
           sounds,
           setSounds: edit.sounds,
           overlays,
@@ -1400,7 +1431,7 @@ function Workspace(p: WorkspaceProps) {
     ["titles", "Layers", titles.length > 0 || overlays.length > 0, "Text and videos over the picture"],
     ["highlights", "Picks", !!highlights?.length, "Find the liveliest moments"],
     ["frame", "Frame", !!project.frame || motion.length > 0, "Shape (9:16, square...) and zoom"],
-    ["audio", "Audio", !!project.music || sounds.length > 0 || volume !== 1, "Music, sounds and volume"],
+    ["audio", "Audio", !!project.music || sounds.length > 0 || volume !== 1 || denoise !== "off", "Music, sounds, volume and noise"],
     ["export", "Export", false, "Save the finished video"],
   ];
   const anyClip = (has: (c: ClipSpec) => boolean) => project.clips.some(has);

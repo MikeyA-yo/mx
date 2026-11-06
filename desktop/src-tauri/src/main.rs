@@ -43,6 +43,7 @@ fn main() {
             export::export,
             export::export_gif,
             export::preview_transition,
+            media::preview_denoise,
             export::list_encoders,
             system::doctor,
             project::save_project,

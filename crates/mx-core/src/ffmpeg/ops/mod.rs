@@ -7,6 +7,7 @@
 mod burn;
 mod clip;
 mod compress;
+pub mod denoise;
 mod gif;
 mod jumpcut;
 mod preview;
