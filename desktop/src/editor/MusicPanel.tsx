@@ -15,8 +15,9 @@ export default function MusicPanel({ ed }: { ed: EditorApi }) {
   };
 
   return (
-    <div className="panel">
-      <p className="help">A soundtrack under the whole video. It loops if the video is longer, and fades out at the end.</p>
+    <div>
+      <h3 className="section">Music · whole video</h3>
+      <p className="help">A soundtrack under everything. It loops if the video is longer, and fades out at the end.</p>
       {!music && (
         <button className="btn primary wide" onClick={choose}>
           Add music...
@@ -61,7 +62,7 @@ export default function MusicPanel({ ed }: { ed: EditorApi }) {
           <label className="toggle">
             <input type="checkbox" checked={music.duck} onChange={(e) => set({ ...music, duck: e.target.checked })} />
             <span>
-              Duck under speech <span className="faint">(music dips while the clips have sound)</span>
+              Duck under speech <span className="faint">(music dips while the clips or sounds are loud)</span>
             </span>
           </label>
           <p className="faint" style={{ marginTop: 14 }}>

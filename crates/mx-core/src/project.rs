@@ -52,6 +52,33 @@ pub struct Clip {
     /// Zoom and pan over time, eased between keyframes. Empty = still.
     #[serde(default)]
     pub motion: Vec<Keyframe>,
+    /// Audio that starts at a moment of this clip: a voiceover, an effect.
+    #[serde(default)]
+    pub sounds: Vec<Sound>,
+}
+
+/// A piece of audio started at a moment of a clip. It plays on from there
+/// to its own end, across later clips, cuts and transitions: a voiceover
+/// keeps going while the pictures change. Anchoring it to a clip keeps it
+/// in sync with that clip when clips are reordered or recut.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Sound {
+    pub source: PathBuf,
+    /// When it starts, in its clip's source time.
+    pub at: f64,
+    /// Where in the file to start, seconds.
+    #[serde(default)]
+    pub offset: f64,
+    /// How much of the file to play; `None` plays to its end.
+    #[serde(default)]
+    pub duration: Option<f64>,
+    /// Linear gain; 1 is as recorded.
+    #[serde(default = "one")]
+    pub volume: f64,
+    #[serde(default)]
+    pub fade_in: f64,
+    #[serde(default)]
+    pub fade_out: f64,
 }
 
 /// One point of a clip's zoom/pan path. Between keyframes the view eases
@@ -81,6 +108,7 @@ impl Clip {
             transcript: None,
             transition: None,
             motion: Vec::new(),
+            sounds: Vec::new(),
         }
     }
 }
@@ -206,6 +234,22 @@ impl Placement {
     /// Source range -> the output ranges it plays at.
     pub fn place(&self, r: Range) -> Vec<Range> {
         map_range(&self.keep, r).into_iter().map(|p| Range::new(p.start + self.offset, p.end + self.offset)).collect()
+    }
+
+    /// Source moment -> the output moment it plays at. A moment that was
+    /// cut snaps to the next kept one (or the clip's end).
+    pub fn at(&self, t: f64) -> f64 {
+        let mut out = 0.0;
+        for k in &self.keep {
+            if t < k.start {
+                break;
+            }
+            if t < k.end {
+                return self.offset + out + t - k.start;
+            }
+            out += k.len();
+        }
+        self.offset + out
     }
 }
 
@@ -340,6 +384,15 @@ mod tests {
         assert_eq!((layout[1].offset, layout[1].overlap), (3.0, 1.0));
         assert_eq!((layout[2].offset, layout[2].overlap), (5.0, 1.0));
         assert_eq!(length(&layout), 7.0);
+    }
+
+    #[test]
+    fn moments_in_cut_time_snap_to_the_next_kept_moment() {
+        let p = Placement { offset: 10.0, keep: vec![r(0.0, 2.0), r(5.0, 6.0)], overlap: 0.0 };
+        assert_eq!(p.at(1.5), 11.5);
+        assert_eq!(p.at(3.0), 12.0);
+        assert_eq!(p.at(5.5), 12.5);
+        assert_eq!(p.at(9.0), 13.0);
     }
 
     #[test]

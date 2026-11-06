@@ -19,6 +19,8 @@ type Props = {
   titles: Title[];
   /** Zoom/pan keyframe times. */
   keyframes: number[];
+  /** Sounds started on this clip, in its source time. */
+  sounds: Range[];
   zoom: number;
   onSeek: (t: number) => void;
   onSelect: (r: Range | null) => void;
@@ -172,6 +174,13 @@ export default function Timeline(p: Props) {
             >
               #{i + 1}
             </div>
+          ))}
+          {p.sounds.map((s, i) => (
+            <div
+              key={`s${i}`}
+              className="mark-sound"
+              style={{ left: x(s.start), width: Math.max(6, Math.min(width - x(s.start), x(s.end - s.start))) }}
+            />
           ))}
           {p.keyframes.map((t, i) => (
             <div key={`k${i}`} className="mark-key" style={{ left: x(t) }} title={`Zoom/pan keyframe at ${clock(t, true)}`} />

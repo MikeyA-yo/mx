@@ -25,6 +25,7 @@ import {
   type Music,
   type Range,
   type Segment,
+  type Sound,
   type Title,
   type Transcript,
   type Transition,
@@ -40,10 +41,20 @@ import TextPanel from "../editor/TextPanel";
 import TitlesPanel from "../editor/TitlesPanel";
 import HighlightsPanel from "../editor/HighlightsPanel";
 import FramePanel from "../editor/FramePanel";
-import MusicPanel from "../editor/MusicPanel";
+import AudioPanel from "../editor/AudioPanel";
 import ExportPanel from "../editor/ExportPanel";
 import { coreProject, projectFile, readProjectFile } from "../editor/exporting";
-import { motionAt, outputSize, toOutput, type ClipEditorState, type ClipSpec, type EditorApi, type Pauses, type ProjectApi } from "../editor/state";
+import {
+  motionAt,
+  outputSize,
+  toOutput,
+  type ClipEditorState,
+  type ClipSpec,
+  type EditorApi,
+  type Pauses,
+  type PlacedSound,
+  type ProjectApi,
+} from "../editor/state";
 
 const MEDIA_EXTENSIONS = ["mp4", "mkv", "mov", "webm", "m4v", "avi", "flv", "ts", "mp3", "m4a", "wav", "flac", "ogg", "opus", "aac"];
 
@@ -70,7 +81,7 @@ const overlapOf = (t: Transition | null, before: number, after: number) => {
 };
 
 /** A clip in the project; `initial` restores a saved editor. */
-type Saved = { editor: ClipEditorState; titles: Title[]; motion: Keyframe[] };
+type Saved = { editor: ClipEditorState; titles: Title[]; motion: Keyframe[]; volume: number; sounds: Sound[] };
 type ClipEntry = { id: string; path: string; initial?: Saved };
 
 type Props = {
@@ -168,7 +179,7 @@ export default function EditorPage({ request, onOpen }: Props) {
       const entries = f.clips.map((c) => ({
         id: newTaskId(),
         path: c.source,
-        initial: { editor: c.editor, titles: c.titles ?? [], motion: c.motion ?? [] },
+        initial: { editor: c.editor, titles: c.titles ?? [], motion: c.motion ?? [], volume: c.volume ?? 1, sounds: c.sounds ?? [] },
       }));
       setClips(entries);
       setSpecs({});
@@ -246,6 +257,19 @@ export default function EditorPage({ request, onOpen }: Props) {
     offset += d;
     previous = d;
   });
+  // Every sound on the output, for the preview: each starts where its
+  // clip's moment plays and runs its length, past the clip if it's long.
+  const placedSounds: PlacedSound[] = ordered.flatMap((spec) =>
+    spec.sounds.map((s) => ({
+      src: s.source,
+      start: (offsets[spec.id] ?? 0) + toOutput(spec.keep, s.at),
+      length: s.duration ?? 0,
+      offset: s.offset,
+      volume: s.volume,
+      fadeIn: s.fade_in,
+      fadeOut: s.fade_out,
+    })),
+  );
 
   const sequence = (
     <div className="sequence">
@@ -379,6 +403,7 @@ export default function EditorPage({ request, onOpen }: Props) {
             active={c.id === active}
             project={project}
             outputOffset={offsets[c.id] ?? 0}
+            placedSounds={placedSounds}
             playRequest={playNext?.id === c.id ? playNext.n : 0}
             sequence={sequence}
             toolbar={toolbar}
@@ -444,7 +469,7 @@ function Empty(p: { onOpen: (paths: string[]) => void; onOpenProject: (path: str
   );
 }
 
-type Tab = "cut" | "text" | "titles" | "highlights" | "frame" | "music" | "export";
+type Tab = "cut" | "text" | "titles" | "highlights" | "frame" | "audio" | "export";
 
 type WorkspaceProps = {
   id: string;
@@ -453,6 +478,8 @@ type WorkspaceProps = {
   project: ProjectApi;
   /** Where this clip starts in the output, for music sync. */
   outputOffset: number;
+  /** The project's sounds on the output, to play in step. */
+  placedSounds: PlacedSound[];
   /** Changes when the project wants this clip to start playing. */
   playRequest: number;
   sequence: React.ReactNode;
@@ -495,6 +522,9 @@ function Workspace(p: WorkspaceProps) {
   const [highlights, setHighlights] = useState<Highlight[] | null>(saved?.highlights ?? null);
   const [skipCuts, setSkipCuts] = useState(saved?.skipCuts ?? true);
   const [motion, setMotion] = useState<Keyframe[]>(p.initial?.motion ?? []);
+  const [volume, setVolume] = useState(p.initial?.volume ?? 1);
+  const [sounds, setSounds] = useState<Sound[]>(p.initial?.sounds ?? []);
+  const soundEls = useRef<(HTMLAudioElement | null)[]>([]);
   const [plan, setPlan] = useState<EditPlan>({ cuts: [], keep: [], outputDuration: 0 });
   const [cues, setCues] = useState<Segment[]>([]);
 
@@ -566,9 +596,11 @@ function Workspace(p: WorkspaceProps) {
         titles,
         transition: null,
         motion,
+        volume,
+        sounds,
         editor: { pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts },
       },
-    [media, plan, keptTranscript, titles, motion, p.id, pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts],
+    [media, plan, keptTranscript, titles, motion, volume, sounds, p.id, pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts],
   );
   const onSpec = p.onSpec;
   useEffect(() => {
@@ -585,8 +617,8 @@ function Workspace(p: WorkspaceProps) {
 
   // Playback clock, skipping what's cut, handing over to the next clip at
   // the end, and keeping the music in step.
-  const live = useRef({ plan, skipCuts, active: p.active, onEnded: p.onEnded, music: project.music, offset: p.outputOffset });
-  live.current = { plan, skipCuts, active: p.active, onEnded: p.onEnded, music: project.music, offset: p.outputOffset };
+  const live = useRef({ plan, skipCuts, active: p.active, onEnded: p.onEnded, music: project.music, offset: p.outputOffset, sounds: p.placedSounds, volume });
+  live.current = { plan, skipCuts, active: p.active, onEnded: p.onEnded, music: project.music, offset: p.outputOffset, sounds: p.placedSounds, volume };
   useEffect(() => {
     const v = video.current;
     if (!v) return;
@@ -598,7 +630,28 @@ function Workspace(p: WorkspaceProps) {
     };
     const tick = () => {
       const t = v.currentTime;
-      const { plan, skipCuts, music, offset } = live.current;
+      const { plan, skipCuts, music, offset, sounds, volume } = live.current;
+      // The web view can't play louder than as recorded; the export can.
+      v.volume = Math.min(1, Math.max(0, volume));
+      // Sounds: each plays while the output clock is inside it, faded.
+      const now = offset + toOutput(plan.keep, t);
+      sounds.forEach((s, k) => {
+        const el = soundEls.current[k];
+        if (!el) return;
+        const inside = now >= s.start && now < s.start + s.length;
+        if (!inside || v.paused) {
+          if (!el.paused) el.pause();
+          return;
+        }
+        const into = now - s.start;
+        const want = s.offset + into;
+        if (el.paused) {
+          el.currentTime = want;
+          el.play().catch(() => {});
+        } else if (Math.abs(el.currentTime - want) > 0.3) el.currentTime = want;
+        const fade = Math.min(1, s.fadeIn > 0 ? into / s.fadeIn : 1, s.fadeOut > 0 ? (s.length - into) / s.fadeOut : 1);
+        el.volume = Math.max(0, Math.min(1, s.volume * fade));
+      });
       if (skipCuts && !v.paused) {
         const cut = plan.cuts.find((c) => t >= c.start && t < c.end - 0.02);
         if (cut) {
@@ -644,6 +697,7 @@ function Workspace(p: WorkspaceProps) {
     if (!p.active) {
       video.current?.pause();
       audio.current?.pause();
+      soundEls.current.forEach((el) => el?.pause());
     }
   }, [p.active]);
   useEffect(() => {
@@ -738,6 +792,10 @@ function Workspace(p: WorkspaceProps) {
           setHighlights,
           motion,
           setMotion,
+          volume,
+          setVolume,
+          sounds,
+          setSounds,
           skipCuts,
           setSkipCuts,
           project,
@@ -784,7 +842,7 @@ function Workspace(p: WorkspaceProps) {
     ["titles", "Titles", titles.length > 0],
     ["highlights", "Picks", !!highlights?.length],
     ["frame", "Frame", !!project.frame || motion.length > 0],
-    ["music", "Music", !!project.music],
+    ["audio", "Audio", !!project.music || sounds.length > 0 || volume !== 1],
     ["export", "Export", false],
   ];
 
@@ -844,6 +902,9 @@ function Workspace(p: WorkspaceProps) {
           </div>
         )}
         {project.music && <audio ref={audio} src={convertFileSrc(project.music.source)} preload="auto" loop />}
+        {p.placedSounds.map((s, k) => (
+          <audio key={`${k}-${s.src}`} ref={(el) => void (soundEls.current[k] = el)} src={convertFileSrc(s.src)} preload="auto" />
+        ))}
         <div className="transport">
           <button className="icon-btn big" onClick={togglePlay} title="Play/pause (Space)">
             {playing ? <PauseIcon /> : <PlayIcon />}
@@ -883,7 +944,7 @@ function Workspace(p: WorkspaceProps) {
         {tab === "titles" && <TitlesPanel ed={ed} />}
         {tab === "highlights" && <HighlightsPanel ed={ed} />}
         {tab === "frame" && <FramePanel ed={ed} />}
-        {tab === "music" && <MusicPanel ed={ed} />}
+        {tab === "audio" && <AudioPanel ed={ed} />}
         {tab === "export" && <ExportPanel ed={ed} />}
       </aside>
 
@@ -900,6 +961,7 @@ function Workspace(p: WorkspaceProps) {
           highlights={highlights ?? []}
           titles={titles}
           keyframes={motion.map((k) => k.time)}
+          sounds={sounds.map((s) => ({ start: s.at, end: s.at + (s.duration ?? 0) }))}
           zoom={zoom}
           onSeek={seek}
           onSelect={setSelection}

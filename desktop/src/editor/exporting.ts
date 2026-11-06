@@ -19,11 +19,12 @@ function projectClip(spec: ClipSpec, keep: Range[] = spec.keep): ProjectClip {
   return {
     source: spec.media.path,
     keep,
-    volume: 1,
+    volume: spec.volume,
     titles: spec.titles,
     transcript: spec.transcript,
     transition: spec.transition,
     motion: spec.motion,
+    sounds: spec.sounds,
   };
 }
 

@@ -167,6 +167,19 @@ export type Transition = { kind: TransitionKind; duration: number };
 /** A point on a clip's zoom/pan path, in its source time. */
 export type Keyframe = { time: number; zoom: number; x: number; y: number };
 
+/** Audio started at a moment of a clip (its source time), playing on
+ * across later clips until its own end. */
+export type Sound = {
+  source: string;
+  at: number;
+  offset: number;
+  /** Seconds of the file to play; null plays to its end. */
+  duration: number | null;
+  volume: number;
+  fade_in: number;
+  fade_out: number;
+};
+
 /** One clip, as mx-core's renderer (and `mx render`) reads it. */
 export type ProjectClip = {
   source: string;
@@ -177,6 +190,7 @@ export type ProjectClip = {
   transcript: Transcript | null;
   transition: Transition | null;
   motion: Keyframe[];
+  sounds: Sound[];
 };
 
 export type Project = {

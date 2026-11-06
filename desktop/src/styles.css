@@ -1000,3 +1000,12 @@ kbd {
   border-radius: 6px;
   background: black;
 }
+.mark-sound {
+  position: absolute;
+  bottom: 16px;
+  height: 6px;
+  border-radius: 3px;
+  background: #3ccf91;
+  opacity: 0.9;
+  pointer-events: none;
+}

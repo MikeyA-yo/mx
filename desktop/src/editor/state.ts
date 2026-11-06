@@ -14,6 +14,7 @@ import type {
   Music,
   Range,
   SilenceReport,
+  Sound,
   Title,
   Transcript,
   Transition,
@@ -53,8 +54,14 @@ export type ClipSpec = {
   /** How it takes over from the clip before (set in the clip bar). */
   transition: Transition | null;
   motion: Keyframe[];
+  /** The clip's own sound level: 0 mutes, 1 as recorded. */
+  volume: number;
+  sounds: Sound[];
   editor: ClipEditorState;
 };
+
+/** A sound placed on the output, for previewing. */
+export type PlacedSound = { src: string; start: number; length: number; offset: number; volume: number; fadeIn: number; fadeOut: number };
 
 /** Settings shared by every clip. */
 export type ProjectApi = {
@@ -106,6 +113,11 @@ export type EditorApi = {
 
   motion: Keyframe[];
   setMotion: (m: Keyframe[]) => void;
+
+  volume: number;
+  setVolume: (v: number) => void;
+  sounds: Sound[];
+  setSounds: (s: Sound[]) => void;
 
   skipCuts: boolean;
   setSkipCuts: (on: boolean) => void;

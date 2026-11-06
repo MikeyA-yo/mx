@@ -215,9 +215,14 @@ session back if the window was closed without saving.
   the clip on screen: presets (slow zoom in/out, punch-in, pan across) or
   keyframes of zoom and position, eased between (a `scale` evaluated per
   frame, then a `crop` that follows the keyframed point).
-- **Music**: a soundtrack under everything that loops if it's short,
-  starts where you choose in the song, fades out, and ducks under the
-  clips' own sound (`sidechaincompress` keyed on it).
+- **Audio**: each clip's own sound from muted to 200% (turn it down
+  under a voiceover, mute it for b-roll). **Sounds** (a voiceover, an
+  effect) start at a moment of a clip and play to their own end, over the
+  clips after it, with their own volume, fades and in/out points in the
+  file; anchored to a clip, they stay in sync when clips move or are
+  recut. **Music** under everything loops if it's short, starts where you
+  choose in the song, fades out, and ducks under the clips and sounds
+  (`sidechaincompress` keyed on them).
 - **Export**: every clip, cut, the frame, captions, titles and music in
   **one encode** (`ops::render_project`), optionally two-passed under a
   file size. GIFs from the selection.
@@ -275,6 +280,6 @@ their data types implement `Serialize`, so a UI can forward them as JSON.
 1. **Adaptive streaming**: encode a 1080/720/480/240 ladder with aligned keyframes, package as HLS/DASH.
 2. **Auto-highlights**: done for activity (loudness, motion, cuts); next, transcript-aware picks.
 3. **Subtitles**: done (Whisper → SRT/VTT, styled burn-in, editing by transcript); next, word-level timing.
-4. **Desktop editor**: clips, titles, music, transitions (with previews), zoom & pan, saved projects and word highlighting done; next, stickers and image overlays, speed ramps, audio-only tracks.
+4. **Desktop editor**: clips, titles, music, sounds and clip volume, transitions (with previews), zoom & pan, saved projects and word highlighting done; next, overlay clips (b-roll over a voice), beat-synced cuts, stickers, speed ramps.
 5. **Live recorder**: watch a channel, record when it goes live, handle stream drops.
 6. **Enhancement**: Real-ESRGAN upscaling, RIFE interpolation, Demucs stem separation.

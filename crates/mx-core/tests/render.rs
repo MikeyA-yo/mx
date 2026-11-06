@@ -249,3 +249,60 @@ fn motion_zooms_along_keyframes_in_source_time() {
     let (vd, ad) = durations(&output);
     assert!((vd - 4.0).abs() < 0.1 && (ad - vd).abs() < 0.1, "video {vd}, audio {ad}");
 }
+
+/// RMS level (dBFS) of `path`'s audio between `from` and `to`.
+fn level(path: &Path, from: f64, to: f64) -> f64 {
+    let out = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-ss", &from.to_string(), "-t", &(to - from).to_string(), "-i"])
+        .arg(path)
+        .args(["-af", "astats=metadata=1:reset=0,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-", "-f", "null", "-"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.strip_prefix("lavfi.astats.Overall.RMS_level="))
+        .next_back()
+        .map_or(-120.0, |v| v.parse().unwrap_or(-120.0))
+}
+
+#[test]
+fn sounds_play_over_muted_and_silent_clips_across_the_join() {
+    use mx_core::project::{Clip, Project, Sound};
+    if version("ffmpeg").is_none() {
+        return;
+    }
+    let dir = dir("sounds");
+    let a = dir.join("a.mp4");
+    source(&a, &["-c:a", "aac"]);
+    let b = dir.join("b.mp4");
+    Job::new(&b)
+        .args(["-f", "lavfi", "-i", "smptebars=duration=4:size=320x240:rate=30", "-c:v", "libx264", "-preset", "ultrafast"])
+        .overwrite(true)
+        .run(&CancelToken::new(), |_| {})
+        .unwrap();
+    let voice = dir.join("voice.m4a");
+    Job::new(&voice)
+        .args(["-f", "lavfi", "-i", "sine=frequency=330:duration=6", "-c:a", "aac"])
+        .overwrite(true)
+        .run(&CancelToken::new(), |_| {})
+        .unwrap();
+
+    // Clip a (10 s, its own tone muted), then silent clip b (4 s). The
+    // voice starts 7 s into a and runs 6 s: 3 s over a, 3 s over b.
+    let mut first = Clip::new(&a);
+    first.volume = 0.0;
+    first.sounds = vec![Sound { source: voice, at: 7.0, offset: 0.0, duration: None, volume: 1.0, fade_in: 0.0, fade_out: 0.0 }];
+    let project = Project { clips: vec![first, Clip::new(&b)], ..Project::default() };
+    let output = dir.join("out.mp4");
+    let video = VideoEncode { encoder: Encoder::lookup("libx264").unwrap(), quality: None };
+    let job = mx_core::ffmpeg::ops::render_project(&project, &[], &output, Some(video)).unwrap();
+    job.job.clone().overwrite(true).run(&CancelToken::new(), |_| {}).unwrap();
+
+    let (vd, ad) = durations(&output);
+    assert!((vd - 14.0).abs() < 0.1 && (ad - vd).abs() < 0.1, "video {vd}, audio {ad}");
+    // Muted clip, before the voice: silence. Then the voice, on both sides of the join.
+    assert!(level(&output, 1.0, 6.0) < -60.0, "{}", level(&output, 1.0, 6.0));
+    assert!(level(&output, 7.5, 9.5) > -30.0, "{}", level(&output, 7.5, 9.5));
+    assert!(level(&output, 10.5, 12.5) > -30.0, "{}", level(&output, 10.5, 12.5));
+    assert!(level(&output, 13.3, 13.9) < -60.0, "{}", level(&output, 13.3, 13.9));
+}

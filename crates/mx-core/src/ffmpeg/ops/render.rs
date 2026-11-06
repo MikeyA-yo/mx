@@ -111,6 +111,19 @@ struct MusicPlan {
     fade_out: f64,
 }
 
+/// A sound, already trimmed by its input options.
+#[derive(Debug, Clone)]
+struct SoundPlan {
+    input: usize,
+    /// Output time it starts at.
+    start: f64,
+    /// How long it plays.
+    length: f64,
+    volume: f64,
+    fade_in: f64,
+    fade_out: f64,
+}
+
 #[derive(Debug)]
 struct Plan {
     clips: Vec<ClipPlan>,
@@ -125,6 +138,7 @@ struct Plan {
     /// Escaped filter paths, drawn in order.
     subtitles: Vec<String>,
     music: Option<MusicPlan>,
+    sounds: Vec<SoundPlan>,
 }
 
 /// The filter graph pieces, and the pads to map.
@@ -183,8 +197,10 @@ fn join_with_transitions(g: &mut Graph, plan: &Plan, has_video: bool, any_audio:
 fn graph(plan: &Plan) -> Graph {
     let mut g = Graph::default();
     // One clip, no music: pass streams through untouched where possible.
-    let single = plan.clips.len() == 1 && plan.music.is_none();
-    let any_audio = plan.clips.iter().any(|c| c.audio);
+    let single = plan.clips.len() == 1 && plan.music.is_none() && plan.sounds.is_empty();
+    // Sounds are mixed into the clips' audio, so silent clips still need
+    // a track for them to be mixed into.
+    let any_audio = plan.clips.iter().any(|c| c.audio) || !plan.sounds.is_empty();
     let mut joined = Vec::new();
 
     for (i, c) in plan.clips.iter().enumerate() {
@@ -270,8 +286,28 @@ fn graph(plan: &Plan) -> Graph {
         }
     }
 
+    let total: f64 = plan.clips.iter().map(|c| c.duration - c.transition.map_or(0.0, |t| t.1)).sum();
+    if !plan.sounds.is_empty()
+        && let Some(a) = &audio
+    {
+        // Each sound faded, delayed to its start, and mixed over the clips'
+        // sound; the clips decide the length.
+        let mut ins = format!("[{a}]");
+        for (k, s) in plan.sounds.iter().enumerate() {
+            let fade_out_at = (s.length - s.fade_out).max(0.0);
+            let delay = (s.start * 1000.0).round().max(0.0) as u64;
+            g.parts.push(format!(
+                "[{}:a:0]{AUDIO_FORMAT},asetpts=PTS-STARTPTS,volume={:.3},afade=t=in:d={:.3},\
+                 afade=t=out:st={fade_out_at:.6}:d={:.3},adelay=delays={delay}:all=1[snd{k}]",
+                s.input, s.volume, s.fade_in, s.fade_out
+            ));
+            ins += &format!("[snd{k}]");
+        }
+        g.parts.push(format!("{ins}amix=inputs={}:duration=first:normalize=0[asnd]", plan.sounds.len() + 1));
+        audio = Some("asnd".to_string());
+    }
+
     if let Some(m) = &plan.music {
-        let total: f64 = plan.clips.iter().map(|c| c.duration - c.transition.map_or(0.0, |t| t.1)).sum();
         let fade_at = (total - m.fade_out).max(0.0);
         g.parts.push(format!(
             "[{}:a:0]{AUDIO_FORMAT},atrim=duration={total:.6},asetpts=PTS-STARTPTS,volume={:.3},\
@@ -280,8 +316,9 @@ fn graph(plan: &Plan) -> Graph {
         ));
         audio = Some(match audio {
             Some(a) if m.duck => {
-                // The clips' sound is the sidechain: while it's loud the
-                // music is pushed down, and it comes back in the pauses.
+                // The clips' sound (and any sounds over them) is the
+                // sidechain: while it's loud the music is pushed down, and
+                // it comes back in the pauses.
                 g.parts.push(format!("[{a}]asplit=2[amain][akey]"));
                 g.parts.push("[mus][akey]sidechaincompress=threshold=0.02:ratio=10:attack=15:release=350[mduck]".into());
                 g.parts.push("[amain][mduck]amix=inputs=2:duration=first:normalize=0[amix]".into());
@@ -481,13 +518,47 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
         None => None,
     };
 
+    // Sounds: each trimmed by input options, then placed at its clip's
+    // moment. One that would outlast the video is cut at its end.
+    let mut sounds = Vec::new();
+    for (clip, place) in project.clips.iter().zip(&layout) {
+        for s in &clip.sounds {
+            let start = place.at(s.at);
+            let available = match s.duration {
+                Some(d) => d,
+                None => {
+                    let d = probe(&s.source)?
+                        .duration_secs()
+                        .ok_or_else(|| anyhow!("couldn't read the duration of {}", s.source.display()))?;
+                    d - s.offset
+                }
+            };
+            let length = available.min(duration - start);
+            if length < 0.05 {
+                continue;
+            }
+            if s.offset > 0.0 {
+                job = job.args(["-ss", &format!("{:.6}", s.offset)]);
+            }
+            job = job.args(["-t", &format!("{length:.6}")]).input(&s.source);
+            sounds.push(SoundPlan {
+                input: project.clips.len() + usize::from(music.is_some()) + sounds.len(),
+                start,
+                length,
+                volume: s.volume.max(0.0),
+                fade_in: s.fade_in.clamp(0.0, length / 2.0),
+                fade_out: s.fade_out.clamp(0.0, length / 2.0),
+            });
+        }
+    }
+
     let subtitles = subtitles
         .iter()
         .map(PathBuf::as_path)
         .chain(overlays.iter().map(TempFile::path))
         .map(filter_path)
         .collect::<Result<Vec<_>>>()?;
-    let plan = Plan { clips, rate, size, fit, reframe: project.frame.is_some(), subtitles, music };
+    let plan = Plan { clips, rate, size, fit, reframe: project.frame.is_some(), subtitles, music, sounds };
     let g = graph(&plan);
 
     // Hundreds of ranges overflow Windows' 32k command-line limit, so the
@@ -548,6 +619,7 @@ mod tests {
             reframe: false,
             subtitles: vec![],
             music: None,
+            sounds: vec![],
         }
     }
 
@@ -641,6 +713,20 @@ mod tests {
         assert!(f.contains("eval=frame") && f.contains("crop=320:240:"), "{f}");
         // Never zooming in is no motion at all.
         assert!(motion_filters(&[k(0.0, 1.0), k(2.0, 0.5)], (320, 240), 0.0).is_none());
+    }
+
+    #[test]
+    fn sounds_are_delayed_faded_and_mixed_over_silent_clips() {
+        let mut p = plan(vec![clip(None, (320, 240), false), clip(None, (320, 240), false)]);
+        p.sounds = vec![SoundPlan { input: 2, start: 3.25, length: 4.0, volume: 0.8, fade_in: 0.5, fade_out: 1.0 }];
+        let g = graph(&p);
+        let s = g.parts.join(";\n");
+        // No clip has sound, so both get silence for the voice to sit on.
+        assert!(s.contains("anullsrc=r=48000:cl=stereo,atrim=duration=10.000000[a0]"), "{s}");
+        assert!(s.contains("[2:a:0]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS,volume=0.800,afade=t=in:d=0.500,"), "{s}");
+        assert!(s.contains("afade=t=out:st=3.000000:d=1.000,adelay=delays=3250:all=1[snd0]"), "{s}");
+        assert!(s.contains("[acat][snd0]amix=inputs=2:duration=first:normalize=0[asnd]"), "{s}");
+        assert_eq!(g.audio.as_deref(), Some("[asnd]"));
     }
 
     #[test]
