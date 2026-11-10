@@ -4,7 +4,8 @@ import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import {
   captionCues,
   captionDefaults,
-  clearAutosave,
+  discardSession,
+  projectsDir,
   errorText,
   filmstrip,
   loadProject,
@@ -36,7 +37,8 @@ import {
 import { TaskProgress } from "../components";
 import { BackIcon, PauseIcon, PlayIcon, RedoIcon, ScissorsIcon, UndoIcon } from "../icons";
 import { offerTour, startTour } from "../tour";
-import { baseName, bytes, clock, dirName, isImage, join, load, stem, store } from "../util";
+import { baseName, bytes, clock, dirName, isImage, join, load, rememberProject, stem, store } from "../util";
+import RecentProjects from "../editor/RecentProjects";
 import Stage from "../editor/Stage";
 import Timeline from "../editor/Timeline";
 import CutPanel from "../editor/CutPanel";
@@ -149,6 +151,12 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   const [transitions, setTransitions] = useState<Record<string, Transition | null>>({});
   const [projectPath, setProjectPath] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  // This project's autosave: one file per project, so one never
+  // overwrites another's.
+  const [session, setSession] = useState(() => newTaskId());
+  // A project just opened, or just started, counts as unchanged once its
+  // clips have loaded and settled: only edits after that are unsaved.
+  const cleanWhenReady = useRef(false);
   const [fileError, setFileError] = useState<string | null>(null);
   // The transition preview being made or shown.
   const [preview, setPreview] = useState<{ task: string; index: number; src: string | null; error: string | null } | null>(null);
@@ -210,7 +218,17 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     else if (key === "transitions") setTransitions(v);
     else if (key === "clips") restoreClips(v);
   });
-  const { record } = history;
+  // Any edit ends the settling after a project opens: from then on it's
+  // the user's change, to be autosaved and shown as unsaved.
+  const recordEdit = history.record;
+  const record = useCallback(
+    (changes: Parameters<typeof recordEdit>[0]) => {
+      cleanWhenReady.current = false;
+      recordEdit(changes);
+    },
+    [recordEdit],
+  );
+  const editHistory: History = { ...history, record };
   /** A project setter that can be undone. */
   const tracked =
     <T,>(key: string, value: T, set: (v: T) => void) =>
@@ -236,8 +254,11 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
       }
       if (paths.length === 0) return;
       const added = paths.map((path) => ({ id: newTaskId(), path }));
+      const fresh = clipsRef.current.length === 0;
       const next = [...clipsRef.current, ...added];
       record([{ scope: "project", key: "clips", before: clipsRef.current, after: next }]);
+      // A new project: nothing to save until it's edited.
+      if (fresh) cleanWhenReady.current = true;
       clipsRef.current = next;
       setClips(next);
       setActive(added[0].id);
@@ -311,7 +332,10 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     setProjectPath(null);
     setSaved(null);
     history.clear();
-    clearAutosave();
+    // Nothing unsaved: its autosave has nothing to offer back. (Closed
+    // with unsaved changes, it stays in Recent projects, just in case.)
+    if (!dirty) discardSession(session).catch(() => {});
+    setSession(newTaskId());
   };
 
   // Saving. The file is rebuilt from the clips' latest state each time;
@@ -323,20 +347,26 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     if (!json) return;
     let target = path;
     if (!target) {
+      // Projects go to one place, Videos\mx\Projects, so they're easy to find again.
       const first = ordered[0].media.path;
-      target = await save({ defaultPath: join(dirName(first), `${stem(first)}.mxp`), filters: [{ name: "mx project", extensions: ["mxp"] }] });
+      const dir = await projectsDir().catch(() => dirName(first));
+      target = await save({ defaultPath: join(dir, `${stem(first)}.mxp`), filters: [{ name: "mx project", extensions: ["mxp"] }] });
       if (!target) return;
     }
     try {
       await saveProject(target, JSON.parse(json));
       setProjectPath(target);
       setSaved(json);
-      store("lastProject", target);
+      rememberProject(target);
+      // Saved in full: the autosave isn't needed until the next change.
+      discardSession(session).catch(() => {});
     } catch (e) {
       setFileError(errorText(e));
     }
   };
-  const openFile = async (path: string | null) => {
+  /** Opens a project file, or (with `restore`) an autosaved session, which
+   * carries on autosaving where it was. */
+  const openFile = async (path: string | null, restore?: { session: string; savedTo: string | null }) => {
     try {
       const raw = await loadProject(path);
       if (raw === null) return;
@@ -362,8 +392,12 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
       setMusic(f.music ?? null);
       setCaptionsOn(f.editor?.captionsOn ?? !!f.captions);
       setStyle(f.editor?.style ?? f.captions ?? null);
-      setProjectPath(path);
+      setProjectPath(restore ? restore.savedTo : path);
+      setSession(restore?.session ?? newTaskId());
       setSaved(null);
+      // A file opens as saved; a session's changes are still unsaved.
+      cleanWhenReady.current = !restore;
+      if (path && !restore) rememberProject(path);
       setFileError(null);
       history.clear();
     } catch (e) {
@@ -371,13 +405,28 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     }
   };
 
-  // Autosave a moment after each change, so closing the window loses
-  // nothing; the start screen offers it back.
   useEffect(() => {
-    if (!json) return;
-    const t = setTimeout(() => saveProject(null, JSON.parse(json)).catch(() => {}), 1500);
+    if (!json || !cleanWhenReady.current) return;
+    // Loading settles in a few steps (cuts planned, caption defaults), so
+    // it's the state once that's quiet.
+    const t = setTimeout(() => {
+      cleanWhenReady.current = false;
+      setSaved(json);
+    }, 1000);
     return () => clearTimeout(t);
   }, [json]);
+
+  // Autosave a moment after each unsaved change, so closing the window
+  // loses nothing; the start screen offers it back. It notes the file it
+  // belongs to, if there is one.
+  useEffect(() => {
+    if (!json || !dirty || cleanWhenReady.current) return;
+    const t = setTimeout(() => {
+      const f = JSON.parse(json);
+      saveProject(null, { ...f, editor: { ...f.editor, savedTo: projectPath } }, session).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [json, dirty, session, projectPath]);
 
   // Ctrl+S saves, Ctrl+Shift+S saves as. Ctrl+Z undoes, Ctrl+Shift+Z or
   // Ctrl+Y redoes, except in a text box, which has its own.
@@ -414,6 +463,12 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     setTransitions(({ [id]: _, ...others }) => others);
     if (active === id) setActive(rest[Math.min(i, rest.length - 1)]?.id ?? null);
   };
+  // A clip pointed at its file's new place keeps everything done to it.
+  const relink = (id: string, path: string) => {
+    const next = clips.map((c) => (c.id === id ? { ...c, path } : c));
+    record([{ scope: "project", key: "clips", before: clips, after: next }]);
+    setClips(next);
+  };
   const move = (id: string, by: number) => {
     const i = clips.findIndex((c) => c.id === id);
     const j = i + by;
@@ -435,7 +490,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   if (clips.length === 0) {
     // Removing the last clip can be undone from here too.
     const undo = history.undoName === "clips" ? history.undo : null;
-    return <Empty onOpen={onOpen} onOpenProject={openFile} error={fileError} onUndo={undo} />;
+    return <Empty onOpen={onOpen} onOpenProject={(path, restore) => openFile(path, restore)} error={fileError} onUndo={undo} />;
   }
 
   // The whole-video timeline. Everything on it is in output time; edits
@@ -801,13 +856,15 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
             sequence={sequence}
             toolbar={toolbar}
             initial={c.initial}
-            history={history}
+            history={editHistory}
             register={register}
             video={video}
             seekTo={seekTo?.id === c.id ? seekTo : null}
             onAssets={onAssets}
             onSpec={onSpec}
             onEnded={() => onEnded(c.id)}
+            onRelink={(found) => relink(c.id, found)}
+            onRemove={() => remove(c.id)}
             onClose={close}
           />
         </div>
@@ -816,13 +873,16 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   );
 }
 
-function Empty(p: { onOpen: (paths: string[]) => void; onOpenProject: (path: string | null) => void; error: string | null; onUndo: (() => void) | null }) {
+type EmptyProps = {
+  onOpen: (paths: string[]) => void;
+  onOpenProject: (path: string, restore?: { session: string; savedTo: string | null }) => void;
+  error: string | null;
+  onUndo: (() => void) | null;
+};
+
+function Empty(p: EmptyProps) {
   const { onOpen } = p;
   const recent = load<string[]>("recent", []);
-  const [autosave, setAutosave] = useState(false);
-  useEffect(() => {
-    loadProject(null).then((a) => setAutosave(a !== null)).catch(() => {});
-  }, []);
   return (
     <div className="drop">
       <div>
@@ -845,13 +905,6 @@ function Empty(p: { onOpen: (paths: string[]) => void; onOpenProject: (path: str
               Open project...
             </button>
           </div>
-          {autosave && (
-            <div>
-              <button className="btn ghost" style={{ marginTop: 14 }} onClick={() => p.onOpenProject(null)}>
-                Restore last session
-              </button>
-            </div>
-          )}
           {p.onUndo && (
             <div>
               <button className="btn ghost" style={{ marginTop: 14 }} onClick={p.onUndo}>
@@ -883,9 +936,10 @@ function Empty(p: { onOpen: (paths: string[]) => void; onOpenProject: (path: str
             </a>
           </div>
         </div>
+        <RecentProjects onOpen={p.onOpenProject} />
         {recent.length > 0 && (
           <div className="recent">
-            <h3 className="section">Recent</h3>
+            <h3 className="section">Recent videos</h3>
             {recent.map((p) => (
               <button key={p} onClick={() => onOpen([p])} title={p} className="ellipsis">
                 {baseName(p)}
@@ -925,6 +979,9 @@ type WorkspaceProps = {
   register: (id: string, setters: Record<string, (v: never) => void>) => () => void;
   onSpec: (spec: ClipSpec) => void;
   onEnded: () => void;
+  /** The clip's file was found somewhere else. */
+  onRelink: (path: string) => void;
+  onRemove: () => void;
   onClose: () => void;
 };
 
@@ -1101,6 +1158,7 @@ function Workspace(p: WorkspaceProps) {
   // Load: probe first, then preview, filmstrip and waveform side by side.
   useEffect(() => {
     let live = true;
+    setLoadError(null);
     probeMedia(path)
       .then((m) => {
         if (!live) return;
@@ -1419,14 +1477,35 @@ function Workspace(p: WorkspaceProps) {
       : null;
 
   if (loadError && !media) {
+    // Usually the file was moved, renamed or deleted since the project
+    // was saved: point it at the file's new place, and its edits carry on.
+    const gone = /no such file|cannot find|not found/i.test(loadError);
     return (
       <div className="drop">
         <div className="box">
-          <h1 style={{ margin: "0 0 8px" }}>Can't open {baseName(path)}</h1>
-          <p className="error">{loadError}</p>
-          <button className="btn" onClick={p.onClose}>
-            Back
-          </button>
+          <h1 style={{ margin: "0 0 8px" }}>{gone ? `${baseName(path)} isn't where it was` : `Can't open ${baseName(path)}`}</h1>
+          {gone ? (
+            <p className="muted">
+              It was in <span className="mono">{dirName(path)}</span>. If you moved or renamed it, show mx where it is now; this clip's
+              edits stay as they were.
+            </p>
+          ) : (
+            <p className="error">{loadError}</p>
+          )}
+          <div className="row" style={{ justifyContent: "center" }}>
+            <button
+              className="btn primary"
+              onClick={async () => {
+                const found = await chooseMedia(false);
+                if (found[0]) p.onRelink(found[0]);
+              }}
+            >
+              Find the file...
+            </button>
+            <button className="btn" onClick={p.onRemove}>
+              Remove this clip
+            </button>
+          </div>
         </div>
       </div>
     );

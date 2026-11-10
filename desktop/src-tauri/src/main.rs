@@ -48,7 +48,10 @@ fn main() {
             system::doctor,
             project::save_project,
             project::load_project,
-            project::clear_autosave,
+            project::discard_session,
+            project::recent_projects,
+            project::find_projects,
+            project::projects_dir,
             system::startup_files,
         ])
         .run(tauri::generate_context!())

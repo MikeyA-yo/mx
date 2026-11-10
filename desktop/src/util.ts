@@ -58,6 +58,34 @@ export function store<T>(key: string, value: T) {
   }
 }
 
+/** Project files saved or opened, newest first. Older versions kept
+ * only the last one, as `lastProject`. */
+export function recentProjectPaths(): string[] {
+  const list = load<string[]>("projects", []);
+  const last = load<string | null>("lastProject", null);
+  return last && !list.includes(last) ? [...list, last] : list;
+}
+
+export function rememberProject(path: string) {
+  store("projects", [path, ...recentProjectPaths().filter((p) => p !== path)].slice(0, 20));
+}
+
+export function forgetProject(path: string) {
+  store("projects", recentProjectPaths().filter((p) => p !== path));
+  if (load<string | null>("lastProject", null) === path) store("lastProject", null);
+}
+
+/** How long ago, roughly: "just now", "12 min ago", "3 h ago", "yesterday", "4 days ago", or the date. */
+export function ago(ms: number): string {
+  const s = (Date.now() - ms) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 2 * 86400) return "yesterday";
+  if (s < 14 * 86400) return `${Math.floor(s / 86400)} days ago`;
+  return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
 /** The most recently opened files, newest first. */
 export function rememberRecent(path: string) {
   const recent = load<string[]>("recent", []).filter((p) => p !== path);

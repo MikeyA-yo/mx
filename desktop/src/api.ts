@@ -249,10 +249,29 @@ export const doctor = () => invoke<Check[]>("doctor");
 export const startupFiles = () => invoke<string[]>("startup_files");
 
 /** Save `project` (any JSON) to `path`, or to the autosave when null. */
-export const saveProject = (path: string | null, project: unknown) => invoke<string>("save_project", { path, project });
+/** Writes a project to `path`, or autosaves it as `session` when `path` is null. */
+export const saveProject = (path: string | null, project: unknown, session: string | null = null) =>
+  invoke<string>("save_project", { path, project, session });
 /** A saved project, or the autosave (null when there isn't one). */
 export const loadProject = (path: string | null) => invoke<unknown>("load_project", { path });
-export const clearAutosave = () => invoke<void>("clear_autosave");
+export const discardSession = (session: string) => invoke<void>("discard_session", { session });
+
+/** A project file, or an autosaved session, for the start screen. */
+export type ProjectInfo = {
+  path: string;
+  /** When it was last written, ms since 1970. */
+  modified: number | null;
+  clips: string[];
+  /** Set for an autosaved session: its id. */
+  session: string | null;
+  /** For a session: the file it belongs to, if it was ever saved. */
+  savedTo: string | null;
+  missing: boolean;
+};
+export const recentProjects = (paths: string[]) => invoke<ProjectInfo[]>("recent_projects", { paths });
+export const findProjects = (dirs: string[]) => invoke<ProjectInfo[]>("find_projects", { dirs });
+/** Videos\mx\Projects, where projects are saved unless chosen otherwise. */
+export const projectsDir = () => invoke<string>("projects_dir");
 
 /** Errors from commands arrive as strings; anything else is a bug. */
 export const errorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : String(e));

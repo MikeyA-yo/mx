@@ -196,8 +196,18 @@ plays them.
 **Projects** save as `.mxp` (<kbd>Ctrl+S</kbd>, <kbd>Ctrl+Shift+S</kbd> to
 save as): mx-core's project JSON, which `mx render` reads, plus each
 clip's editor state (pause settings, deleted transcript lines, picks).
-Every change is also autosaved, and the start screen offers the last
-session back if the window was closed without saving.
+Save suggests `Videos\mx\Projects`, so projects
+are in one place. Every unsaved change is also autosaved, one file per
+project (the last ten are kept), so closing the window loses nothing and
+one project never overwrites another's autosave.
+
+The start screen lists **recent projects**: saved files (folder, when,
+which clips, Show in folder) and autosaved sessions, including unsaved
+changes to a saved file, to pick up where they left off. "Find projects
+on this computer" searches Videos, Documents, Desktop, Downloads and the
+recent videos' folders for `.mxp` files. A project whose video has been
+moved says where it was and offers **Find the file...** to point it at
+the new place, its edits kept, or to remove that clip.
 
 - **Cut**: find pauses and jump-cut them (sliders for the shortest pause,
   the breathing room kept and the threshold), or drag on the timeline and
