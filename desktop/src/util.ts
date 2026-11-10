@@ -29,6 +29,11 @@ export function bytes(n: number): string {
 }
 
 export const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+/** Still images: they go over a video as layers, never as clips. (A GIF
+ * moves, so it's a video.) */
+export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"];
+export const isImage = (path: string) => IMAGE_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
 export const dirName = (path: string) => path.replace(/[\\/][^\\/]*$/, "");
 export const stem = (path: string) => baseName(path).replace(/\.[^.]+$/, "");
 export const sep = (path: string) => (path.includes("\\") ? "\\" : "/");

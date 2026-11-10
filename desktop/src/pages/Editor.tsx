@@ -36,7 +36,7 @@ import {
 import { TaskProgress } from "../components";
 import { BackIcon, PauseIcon, PlayIcon, RedoIcon, ScissorsIcon, UndoIcon } from "../icons";
 import { offerTour, startTour } from "../tour";
-import { baseName, bytes, clock, dirName, join, load, stem, store } from "../util";
+import { baseName, bytes, clock, dirName, isImage, join, load, stem, store } from "../util";
 import Stage from "../editor/Stage";
 import Timeline from "../editor/Timeline";
 import CutPanel from "../editor/CutPanel";
@@ -51,7 +51,9 @@ import { useHistory, type History } from "../editor/history";
 import { useLengths } from "../editor/lengths";
 import { coreProject, projectFile, readProjectFile } from "../editor/exporting";
 import {
+  IMAGE_SECONDS,
   fromOutput,
+  imageLayer,
   layerKey,
   motionAt,
   outputSize,
@@ -220,8 +222,18 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   const handled = useRef(0);
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const add = useCallback(
-    (paths: string[]) => {
+    (all: string[]) => {
+      // Images go over the clip on screen, as layers at its playhead.
+      const images = all.filter(isImage);
+      const paths = all.filter((p) => !isImage(p));
+      if (images.length) {
+        const addImages = clipSetters.current[activeRef.current ?? ""]?.addImages;
+        if (addImages) addImages(images as never);
+        else setFileError("Images go over a video: once a video is open, drop the image onto it (or use Layers, Add image).");
+      }
       if (paths.length === 0) return;
       const added = paths.map((path) => ({ id: newTaskId(), path }));
       const next = [...clipsRef.current, ...added];
@@ -258,7 +270,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     offset += d;
     previous = d;
   });
-  const lengths = useLengths(ordered.flatMap((c) => [...c.overlays.map((o) => o.source), ...c.sounds.map((s) => s.source)]));
+  const lengths = useLengths(ordered.flatMap((c) => [...c.overlays.map((o) => o.source), ...c.sounds.map((s) => s.source)]).filter((p) => !isImage(p)));
 
   // Caption placement follows the output frame's orientation.
   const [outW, outH] = first ? outputSize(frame, first) : [1920, 1080];
@@ -454,15 +466,17 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     const end = startOf(c) + c.outputDuration;
     const files = (kind: "overlay" | "sound", list: (Overlay | Sound)[]) =>
       list.map((l, index): LayerBar => {
-        const fileLength = lengths.get(l.source) ?? l.offset + (l.duration ?? 3);
+        // An image has no length of its own: it shows as long as it's asked.
+        const still = isImage(l.source);
+        const fileLength = still ? Infinity : (lengths.get(l.source) ?? l.offset + (l.duration ?? 3));
         const start = at(l.at);
         return {
           clip: c.id,
           ref: { kind, index },
           start,
-          end: start + (l.duration ?? fileLength - l.offset),
+          end: start + (l.duration ?? (still ? IMAGE_SECONDS : fileLength - l.offset)),
           label: baseName(l.source),
-          earliest: start - l.offset,
+          earliest: still ? 0 : start - l.offset,
           latest: start - l.offset + fileLength,
           bounded: false,
         };
@@ -616,7 +630,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     spec.overlays.map((o) => ({
       src: o.source,
       start: (offsets[spec.id] ?? 0) + toOutput(spec.keep, o.at),
-      length: o.duration ?? 0,
+      length: o.duration ?? (isImage(o.source) ? IMAGE_SECONDS : 0),
       offset: o.offset,
       pip: o.pip,
       volume: o.volume,
@@ -995,23 +1009,35 @@ function Workspace(p: WorkspaceProps) {
           setLayer(l);
           if (l) setTab(l.kind === "sound" ? "audio" : "titles");
         },
+        addImages: (paths: string[]) => addImagesRef.current(paths),
       }),
     [p.id, register],
   );
 
+  // Images dropped on the window, from the project: layers at the playhead.
+  const addImagesRef = useRef<(paths: string[]) => void>(() => {});
+  addImagesRef.current = (paths) => {
+    if (!media?.hasVideo) return;
+    const at = video.current?.currentTime ?? time;
+    edit.overlays([...overlays, ...paths.map((source) => imageLayer(source, at))]);
+    pickLayer({ kind: "overlay", index: overlays.length });
+  };
+
   // The layers on the timeline. A video or sound can't be stretched past
   // its own file, so their lengths are probed.
-  const lengths = useLengths([...overlays.map((o) => o.source), ...sounds.map((s) => s.source)]);
+  const lengths = useLengths([...overlays.map((o) => o.source), ...sounds.map((s) => s.source)].filter((s) => !isImage(s)));
   const fileBar = (kind: "overlay" | "sound", index: number, l: Overlay | Sound): LayerBar => {
-    const fileLength = lengths.get(l.source) ?? l.offset + (l.duration ?? 3);
-    const length = l.duration ?? fileLength - l.offset;
+    // An image has no length of its own: it shows as long as it's asked.
+    const still = isImage(l.source);
+    const fileLength = still ? Infinity : (lengths.get(l.source) ?? l.offset + (l.duration ?? 3));
+    const length = l.duration ?? (still ? IMAGE_SECONDS : fileLength - l.offset);
     return {
       clip: p.id,
       ref: { kind, index },
       start: l.at,
       end: l.at + length,
       label: baseName(l.source),
-      earliest: l.at - l.offset,
+      earliest: still ? 0 : l.at - l.offset,
       latest: l.at - l.offset + fileLength,
       bounded: false,
     };

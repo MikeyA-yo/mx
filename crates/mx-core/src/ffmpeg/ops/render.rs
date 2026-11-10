@@ -23,7 +23,7 @@ use super::reframe::{Fit, filtergraph};
 use super::{VideoEncode, aac, audio_codec, finish};
 use crate::ffmpeg::{Job, Probe, filter_path, probe};
 use super::denoise::{Denoiser, quiet_stretch};
-use crate::project::{Clip, Denoise, Keyframe, Placement, Project, length, output_transcript, titles_ass};
+use crate::project::{Clip, Denoise, IMAGE_SECONDS, Keyframe, Placement, Project, is_image, length, output_transcript, titles_ass};
 use crate::speech::{cues, to_ass};
 use crate::temp::TempFile;
 use crate::timeline::{Range, total};
@@ -320,12 +320,18 @@ fn graph(plan: &Plan) -> Graph {
                     (format!("W*{cx:.4}-w/2"), format!("H*{cy:.4}-h/2"))
                 }
             };
-            let fade_out = (o.length - o.fade).max(0.0);
-            g.parts.push(format!(
-                "[ovf{k}]format=yuva420p,fade=t=in:d={:.3}:alpha=1,fade=t=out:st={fade_out:.6}:d={:.3}:alpha=1,\
-                 setpts=PTS+{:.6}/TB[ov{k}]",
-                o.fade, o.fade, o.start
-            ));
+            // No fade means none at all: given 0 s, `fade` uses its default
+            // of 25 frames instead.
+            let fades = match o.fade >= 0.01 {
+                true => format!(
+                    ",fade=t=in:d={:.3}:alpha=1,fade=t=out:st={:.6}:d={:.3}:alpha=1",
+                    o.fade,
+                    (o.length - o.fade).max(0.0),
+                    o.fade
+                ),
+                false => String::new(),
+            };
+            g.parts.push(format!("[ovf{k}]format=yuva420p{fades},setpts=PTS+{:.6}/TB[ov{k}]", o.start));
             g.parts.push(format!("[{v}][ov{k}]overlay=x={x}:y={y}:eof_action=pass:repeatlast=0[vo{k}]"));
             *v = format!("vo{k}");
         }
@@ -629,15 +635,22 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
             }
             let source = probe(&o.source)?;
             if source.video().is_none() {
-                bail!("{} has no video to overlay", o.source.display());
+                bail!("{} has no picture to overlay", o.source.display());
             }
             let start = place.at(o.at);
-            let length = length_of(&o.source, o.offset, o.duration, start)?;
+            // An image is read again and again for as long as it shows; the
+            // fps filter below makes that the video's frame rate.
+            let image = is_image(&o.source);
+            let wanted = if image { Some(o.duration.unwrap_or(IMAGE_SECONDS)) } else { o.duration };
+            let length = length_of(&o.source, o.offset, wanted, start)?;
             if length < 0.05 {
                 continue;
             }
             let input;
-            (job, input) = add_input(job, &o.source, o.offset, length);
+            (job, input) = match image {
+                true => add_input(job.args(["-loop", "1"]), &o.source, 0.0, length),
+                false => add_input(job, &o.source, o.offset, length),
+            };
             let fade = o.fade.clamp(0.0, length / 2.0);
             let pip = o.pip.map(|p| ((((p.size.clamp(0.05, 1.0) * size.0 as f64) / 2.0).round() as u32).max(1) * 2, p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0)));
             layers.push(OverlayPlan { input, start, length, fade, pip });
@@ -849,6 +862,8 @@ mod tests {
         assert!(s.contains("[ovs0]split=2[bg][fg]"), "{s}");
         assert!(s.contains("[ovf0]format=yuva420p,fade=t=in:d=0.200:alpha=1,fade=t=out:st=2.800000:d=0.200:alpha=1,setpts=PTS+2.500000/TB[ov0]"), "{s}");
         assert!(s.contains("[ovs1]scale=96:-2,setsar=1[ovf1]"), "{s}");
+        // No fade at all, not ffmpeg's default of 25 frames.
+        assert!(s.contains("[ovf1]format=yuva420p,setpts=PTS+4.000000/TB[ov1]"), "{s}");
         assert!(s.contains("[vo0][ov1]overlay=x=W*0.7500-w/2:y=H*0.2500-h/2:eof_action=pass:repeatlast=0[vo1]"), "{s}");
         // Captions go on top of the overlays.
         assert!(s.contains("[vo1]subtitles=filename='c.ass'[vs0]"), "{s}");

@@ -205,11 +205,14 @@ session back if the window was closed without saving.
 - **Text**: transcribe, then edit the video by deleting lines from the
   transcript. Burn the rest in as styled captions; the preview shows them
   where and how they'll be drawn.
-- **Layers**: video over the picture, started at a moment of a clip and
+- **Layers**: video or an image over the picture, started at a moment of a clip and
   shown for as long as you set, across later clips: full-frame b-roll
   (fitted like the clips) while the clip's voice carries on, or a
   picture-in-picture box placed and sized on the frame. Muted unless you
-  turn its sound up, faded in and out. And text titles (colour, font,
+  turn its sound up, faded in and out. An image (PNG, JPEG, WebP...)
+  holds still for as long as it's set to show, and a PNG's transparency
+  is kept, so a logo or sticker sits on the picture; images dropped on
+  the window land on the clip on screen at the playhead. And text titles (colour, font,
   size, an optional box), dragged into place on the preview. Captions and
   titles draw over the video layers.
 - **Picks**: the liveliest stretches (highlights), marked on the

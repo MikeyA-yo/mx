@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { CaptionStyle, Frame, MediaSummary, Segment, Title } from "../api";
 import type { PlacedOverlay } from "./state";
+import { isImage } from "../util";
 import { MusicIcon } from "../icons";
 
 type Props = {
@@ -158,19 +159,21 @@ export default function Stage(p: Props) {
           const fit = p.frame?.fit.kind ?? "blur";
           const src = convertFileSrc(o.src);
           const full = !o.pip;
+          const still = isImage(o.src);
+          const fitted = full ? { objectFit: fit === "crop" ? ("cover" as const) : ("contain" as const) } : undefined;
           return (
             <div
               key={`${k}-${o.src}`}
               ref={(el) => void (p.layerRefs.current[k] = el)}
-              className={`layer${full ? " full" : " pip"}`}
+              className={`layer${full ? " full" : " pip"}${still ? " still" : ""}`}
               style={
                 full
                   ? { background: fit === "blur" ? undefined : "black" }
                   : { left: o.pip!.x * boxW, top: o.pip!.y * boxH, width: o.pip!.size * boxW }
               }
             >
-              {full && fit === "blur" && <video className="layer-bg" src={src} preload="auto" muted />}
-              <video src={src} preload="auto" muted={o.volume === 0} style={full ? { objectFit: fit === "crop" ? "cover" : "contain" } : undefined} />
+              {full && fit === "blur" && (still ? <img className="layer-bg" src={src} alt="" /> : <video className="layer-bg" src={src} preload="auto" muted />)}
+              {still ? <img src={src} alt="" style={fitted} /> : <video src={src} preload="auto" muted={o.volume === 0} style={fitted} />}
             </div>
           );
         })}

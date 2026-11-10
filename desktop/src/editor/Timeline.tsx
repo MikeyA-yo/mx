@@ -58,7 +58,7 @@ const SNAP_PX = 7;
 const MIN_LENGTH = 0.2;
 const LANES: [LayerKind, string][] = [
   ["title", "Text"],
-  ["overlay", "Video"],
+  ["overlay", "Video & image"],
   ["sound", "Sound"],
 ];
 const scrolls = new Map<string, number>();

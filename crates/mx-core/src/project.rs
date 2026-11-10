@@ -8,7 +8,7 @@
 //! wrong place. [`Project::layout`] works out where everything lands on
 //! the output timeline.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,16 @@ pub struct Clip {
     pub overlays: Vec<Overlay>,
 }
 
+/// How long an image layer shows when no length is given.
+pub const IMAGE_SECONDS: f64 = 3.0;
+
+/// Whether `path` is a still image, going by its extension. (A GIF moves,
+/// so it counts as a video.)
+pub fn is_image(path: &Path) -> bool {
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    ["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"].contains(&ext.as_str())
+}
+
 /// How much background noise to take out of a clip's sound: see
 /// [`crate::ffmpeg::ops::denoise`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,17 +88,19 @@ pub enum Denoise {
     Strong,
 }
 
-/// A video laid over the main picture, started at a moment of a clip and
-/// playing for its length, across later clips like a [`Sound`].
+/// A video or an image laid over the main picture, started at a moment of
+/// a clip and shown for its length, across later clips like a [`Sound`].
+/// An image holds still, and keeps any transparency it has (a PNG logo).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Overlay {
     pub source: PathBuf,
     /// When it starts, in its clip's source time.
     pub at: f64,
-    /// Where in the file to start, seconds.
+    /// Where in the file to start, seconds (videos only).
     #[serde(default)]
     pub offset: f64,
-    /// How much to show; `None` plays to the file's end.
+    /// How much to show; `None` plays a video to its end, and shows an
+    /// image for [`IMAGE_SECONDS`].
     #[serde(default)]
     pub duration: Option<f64>,
     /// `None` covers the frame (fitted like the clips); `Some` shows it in

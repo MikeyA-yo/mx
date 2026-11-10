@@ -102,6 +102,21 @@ export function useOpenCard(card: string | null) {
   }, [card]);
 }
 
+/** How long a new image layer shows (the engine's default too). */
+export const IMAGE_SECONDS = 3;
+
+/** A new image layer at `at`: a box in the middle, which suits a logo or
+ * a sticker; Full frame suits a photo. */
+export const imageLayer = (source: string, at: number): Overlay => ({
+  source,
+  at,
+  offset: 0,
+  duration: IMAGE_SECONDS,
+  pip: { x: 0.5, y: 0.5, size: 0.4 },
+  volume: 0,
+  fade: 0.2,
+});
+
 /** An overlay placed on the output, for previewing. */
 export type PlacedOverlay = { src: string; start: number; length: number; offset: number; pip: Pip | null; volume: number; fade: number };
 

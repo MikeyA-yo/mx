@@ -125,7 +125,7 @@ const TOURS: Record<TourName, Step[]> = {
     {
       target: "tab-titles",
       title: "Layers",
-      body: "Put text and other videos over your clip: a hook at the start, b-roll, a picture-in-picture.",
+      body: "Put text, other videos and images over your clip: a hook at the start, b-roll, a photo, a logo or a sticker.",
       place: ["left", "below"],
       press: true,
     },

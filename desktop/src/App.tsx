@@ -4,7 +4,7 @@ import { startupFiles } from "./api";
 import { DownloadIcon, EditIcon, HelpIcon, SetupIcon, TasksIcon } from "./icons";
 import { useTasks } from "./tasks";
 import { HelpMenu, TourHost, offerTour, showShortcuts } from "./tour";
-import { rememberRecent } from "./util";
+import { isImage, rememberRecent } from "./util";
 import DownloadPage from "./pages/Download";
 import EditorPage from "./pages/Editor";
 import TasksPage from "./pages/Tasks";
@@ -21,7 +21,8 @@ export default function App() {
 
   const openInEditor = (paths: string[]) => {
     if (paths.length === 0) return;
-    paths.forEach(rememberRecent);
+    // Images become layers, not clips, so they don't belong in Recent.
+    paths.filter((p) => !isImage(p)).forEach(rememberRecent);
     setRequest((r) => ({ paths, n: (r?.n ?? 0) + 1 }));
     setPage("editor");
   };

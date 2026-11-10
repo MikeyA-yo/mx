@@ -384,3 +384,63 @@ fn noise_reduction_quiets_the_background_and_keeps_the_voice() {
     let (vd, ad) = durations(&strong);
     assert!((vd - 7.5).abs() < 0.1 && (ad - vd).abs() < 0.1, "video {vd}, audio {ad}");
 }
+
+/// The colour of one pixel of `path` at `t` seconds.
+fn pixel(path: &Path, t: f64, x: u32, y: u32) -> [u8; 3] {
+    let out = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-ss", &t.to_string(), "-i"])
+        .arg(path)
+        .args(["-frames:v", "1", "-vf", &format!("format=rgb24,crop=1:1:{x}:{y}"), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+        .output()
+        .unwrap();
+    [out.stdout[0], out.stdout[1], out.stdout[2]]
+}
+
+#[test]
+fn image_layers_hold_still_and_keep_their_transparency() {
+    use mx_core::project::{Clip, Overlay, Pip, Project};
+    if version("ffmpeg").is_none() {
+        return;
+    }
+    let dir = dir("images");
+    let main = dir.join("blue.mp4");
+    Job::new(&main)
+        .args(["-f", "lavfi", "-i", "color=c=blue:size=640x360:rate=30:duration=4"])
+        .args(["-f", "lavfi", "-i", "sine=frequency=440:duration=4"])
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac"])
+        .overwrite(true)
+        .run(&CancelToken::new(), |_| {})
+        .unwrap();
+    // A sticker: a red square in the middle of a clear 100x100 canvas.
+    let logo = dir.join("logo.png");
+    Job::new(&logo)
+        .args(["-f", "lavfi", "-i", "color=c=red:size=50x50,format=rgba,pad=100:100:25:25:color=black@0.0"])
+        .args(["-frames:v", "1"])
+        .overwrite(true)
+        .run(&CancelToken::new(), |_| {})
+        .unwrap();
+
+    // A box 25% of the width (160 px) in the middle, from 1 s for 2 s.
+    let mut clip = Clip::new(&main);
+    let pip = Some(Pip { x: 0.5, y: 0.5, size: 0.25 });
+    clip.overlays = vec![Overlay { source: logo, at: 1.0, offset: 0.0, duration: Some(2.0), pip, volume: 0.0, fade: 0.0 }];
+    let project = Project { clips: vec![clip], ..Project::default() };
+    let output = dir.join("out.mp4");
+    let video = VideoEncode { encoder: Encoder::lookup("libx264").unwrap(), quality: None };
+    let job = mx_core::ffmpeg::ops::render_project(&project, &[], &output, Some(video)).unwrap();
+    job.job.clone().overwrite(true).run(&CancelToken::new(), |_| {}).unwrap();
+
+    let (vd, ad) = durations(&output);
+    assert!((vd - 4.0).abs() < 0.1 && (ad - vd).abs() < 0.1, "video {vd}, audio {ad}");
+    let red = |p: [u8; 3]| p[0] > 180 && p[1] < 80 && p[2] < 80;
+    let blue = |p: [u8; 3]| p[2] > 180 && p[0] < 80 && p[1] < 80;
+    // The square shows in the middle while it's on, the same at both ends
+    // of its time (it holds still), and the clear edge of the box shows the
+    // clip through it.
+    assert!(red(pixel(&output, 1.3, 320, 180)), "{:?}", pixel(&output, 1.3, 320, 180));
+    assert!(red(pixel(&output, 2.7, 320, 180)), "{:?}", pixel(&output, 2.7, 320, 180));
+    assert!(blue(pixel(&output, 2.0, 250, 180)), "{:?}", pixel(&output, 2.0, 250, 180));
+    // Before and after it: just the clip.
+    assert!(blue(pixel(&output, 0.5, 320, 180)), "{:?}", pixel(&output, 0.5, 320, 180));
+    assert!(blue(pixel(&output, 3.5, 320, 180)), "{:?}", pixel(&output, 3.5, 320, 180));
+}
