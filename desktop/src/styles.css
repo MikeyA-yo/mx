@@ -909,12 +909,23 @@ kbd {
   outline-offset: 4px;
 }
 
+.sequence-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 8px;
+}
 .sequence {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 14px 8px;
   overflow-x: auto;
+  scrollbar-width: thin;
+}
+.sequence-bar .view-switch {
+  flex: none;
 }
 .seq-clip {
   display: flex;

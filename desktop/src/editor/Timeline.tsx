@@ -41,6 +41,8 @@ type Props = {
   /** A layer dragged to new times; `edge` says which part was held. */
   onMoveLayer: (bar: LayerBar, start: number, end: number, edge: Edge) => void;
   onPickBlock?: (id: string, t: number) => void;
+  /** A clip double-clicked: to edit it on its own. */
+  onOpenBlock?: (id: string) => void;
   /** A clip dragged to a new place in the order. */
   onMoveBlock?: (id: string, index: number) => void;
   /** A clip's edge dragged by `by` seconds (positive is later). */
@@ -365,8 +367,9 @@ export default function Timeline(p: Props) {
                   key={raw.id}
                   className={`clip-block${raw.active ? " active" : ""}${ghost?.key === key ? " dragging" : ""}`}
                   style={{ left: x(b.start), width: Math.max(10, x(b.end - b.start)) }}
-                  title={`Clip ${raw.n}: ${raw.label}, ${clock(raw.end - raw.start, true)}. Click to edit it, drag to reorder, drag an edge to trim.`}
+                  title={`Clip ${raw.n}: ${raw.label}, ${clock(raw.end - raw.start, true)}. Click to go to it, double-click to edit it on its own, drag to reorder, drag an edge to trim.`}
                   onMouseDown={(e) => dragBlock(e, raw, "move")}
+                  onDoubleClick={() => p.onOpenBlock?.(raw.id)}
                 >
                   {raw.transition && <span className="clip-join" title={raw.transition} />}
                   <span className="layer-name">

@@ -179,6 +179,14 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   const [assets, setAssets] = useState<Record<string, Assets>>({});
   const onAssets = useCallback((id: string, a: Assets) => setAssets((all) => ({ ...all, [id]: a })), []);
   const [mode, setMode] = useState<"video" | "clip">(load("timeline.mode", "video"));
+  // The clip on screen stays in view in the clip bar.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const el = Array.from(document.querySelectorAll<HTMLElement>(".seq-clip.active")).find((e) => e.getClientRects().length);
+      el?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [active]);
   useEffect(() => store("timeline.mode", mode), [mode]);
   const [videoZoom, setVideoZoom] = useState(1);
   const [videoSelection, setVideoSelection] = useState<Range | null>(null);
@@ -776,7 +784,9 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     })),
   );
 
+  // The clip bar: the clips scroll; the view switch stays in reach however many there are.
   const sequence = (
+    <div className="sequence-bar">
     <div className="sequence" data-tour="sequence">
       {clips.map((c, i) => {
         const spec = specs[c.id];
@@ -846,11 +856,16 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
       <button className="btn small" onClick={async () => onOpen(await chooseMedia(true))} title="Add more videos after these">
         + Add clip
       </button>
-      <div className="chips view-switch" style={{ marginLeft: "auto" }} data-tour="view-switch">
+    </div>
+      <div className="chips view-switch" data-tour="view-switch">
         <button className={`chip${mode === "video" ? " on" : ""}`} onClick={() => setMode("video")} title="All the clips end to end, as the export plays them">
           Whole video
         </button>
-        <button className={`chip${mode === "clip" ? " on" : ""}`} onClick={() => setMode("clip")} title="The clip on screen, with what's cut shown in red">
+        <button
+          className={`chip${mode === "clip" ? " on" : ""}`}
+          onClick={() => setMode("clip")}
+          title="Just the clip on screen, spread across the timeline, with what's cut shown in red (or double-click a clip on the whole-video timeline)"
+        >
           This clip
         </button>
       </div>
@@ -1841,6 +1856,7 @@ function Workspace(p: WorkspaceProps) {
               onPickLayer={v.pickLayer}
               onMoveLayer={v.moveLayer}
               onPickBlock={(_, t) => v.seek(t)}
+              onOpenBlock={() => v.setMode("clip")}
               onMoveBlock={v.moveBlock}
               onTrimBlock={v.trimBlock}
             />
