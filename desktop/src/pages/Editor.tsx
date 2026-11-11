@@ -1504,6 +1504,7 @@ function Workspace(p: WorkspaceProps) {
     if (!p.active || !media) return;
     const target = e.target as HTMLElement;
     if (["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName) && (target as HTMLInputElement).type !== "range") return;
+    if ((target as HTMLInputElement).type === "range" && e.key.startsWith("Arrow")) return;
     const step = media.fps ? 1 / media.fps : 1 / 30;
     const k = e.key.toLowerCase();
     // The whole-video timeline selects and cuts across clips.
@@ -1755,7 +1756,14 @@ function Workspace(p: WorkspaceProps) {
           <span className="grow" />
           {shownSelection ? (
             <span className="muted mono" title="Press X to cut it out, Esc to clear">
-              {clock(shownSelection.start, true)}–{clock(shownSelection.end, true)} selected
+              {clock(shownSelection.start, true)}–{clock(shownSelection.end, true)} selected{" "}
+              <button
+                className="btn small ghost"
+                onClick={() => (wholeVideo ? v.setSelection(null) : setSelection(null))}
+                title="Clear the selection (Esc, or double-click the timeline)"
+              >
+                Clear
+              </button>
             </span>
           ) : (
             <span className="faint ellipsis">Click the timeline to jump · drag across it to select</span>

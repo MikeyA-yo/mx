@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { Title } from "../api";
 import { clock } from "../util";
 import { useOpenCard, type EditorApi } from "./state";
@@ -7,6 +8,8 @@ const COLORS = ["#ffffff", "#ffd400", "#ff4d6d", "#4dd9ff", "#7cff6b", "#111111"
 
 export default function TitlesPanel({ ed }: { ed: EditorApi }) {
   useOpenCard(ed.selectedTitle === null ? null : `title-${ed.selectedTitle}`);
+  // New text opens ready to type over.
+  const fresh = useRef<number | null>(null);
   if (!ed.media.hasVideo) return null;
   const titles = ed.titles;
   const update = (i: number, change: Partial<Title>) => ed.setTitles(titles.map((t, j) => (j === i ? { ...t, ...change } : t)));
@@ -17,6 +20,7 @@ export default function TitlesPanel({ ed }: { ed: EditorApi }) {
       { text: "Your text", start, end: Math.min(ed.media.duration, start + 3), x: 0.5, y: 0.2, size: 0.07, color: "#ffffff", font: "Arial", boxed: false },
     ]);
     ed.setSelectedTitle(titles.length);
+    fresh.current = titles.length;
   };
 
   return (
@@ -48,6 +52,13 @@ export default function TitlesPanel({ ed }: { ed: EditorApi }) {
             {open && (
               <div style={{ marginTop: 10 }}>
                 <textarea
+                  ref={(el) => {
+                    if (el && fresh.current === i) {
+                      fresh.current = null;
+                      el.focus();
+                      el.select();
+                    }
+                  }}
                   className="input"
                   rows={2}
                   style={{ width: "100%", resize: "vertical", marginBottom: 10 }}

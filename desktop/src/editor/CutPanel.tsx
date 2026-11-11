@@ -127,7 +127,8 @@ export default function CutPanel({ ed }: { ed: EditorApi }) {
       <h3 className="section">Your cuts</h3>
       <p className="help">
         Drag across the timeline to select (drag its edges to adjust), then press <kbd>X</kbd>. <kbd>I</kbd> and <kbd>O</kbd> set the start
-        and end at the playhead. Made a mistake? <kbd>Ctrl+Z</kbd> undoes it.
+        and end at the playhead. Double-click the timeline or press <kbd>Esc</kbd> to clear the selection. Made a mistake? <kbd>Ctrl+Z</kbd>
+        undoes it.
       </p>
       <button className="btn wide" disabled={!ed.cutSelection} onClick={() => ed.cutSelection?.()}>
         Cut the selection {ed.cutSelection ? `(${span(ed.selectionLength)})` : ""}

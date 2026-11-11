@@ -198,10 +198,16 @@ export default function Timeline(p: Props) {
     window.addEventListener("mouseup", onUp);
   };
 
-  // Empty timeline: click to seek, drag to select.
+  // Empty timeline: click to seek, drag to select. A click keeps the
+  // selection (there's more to do with it than cut); a double-click
+  // clears it, leaving the playhead where it was before.
+  const lastClick = useRef({ at: 0, time: 0 });
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     const t0 = timeAt(e.clientX);
+    const now = performance.now();
+    if (now - lastClick.current.at > 500) lastClick.current.time = p.time;
+    lastClick.current.at = now;
     follow(
       e,
       (_, ev) => {
@@ -210,11 +216,15 @@ export default function Timeline(p: Props) {
       },
       (moved) => {
         if (moved) return;
-        p.onSelect(null);
         p.onPickLayer(null);
         p.onSeek(t0);
       },
     );
+  };
+  const onDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!p.selection || (e.target as HTMLElement).closest(".layer-bar, .clip-block, .mark-hl")) return;
+    p.onSelect(null);
+    p.onSeek(lastClick.current.time);
   };
 
   // The selection's edges drag on their own.
@@ -337,7 +347,7 @@ export default function Timeline(p: Props) {
 
   return (
     <div className="timeline-scroll" ref={scroller} onScroll={(e) => scrolls.set(p.scrollKey, e.currentTarget.scrollLeft)}>
-      <div className="tracks" style={{ width }} onMouseDown={onMouseDown} ref={tracks}>
+      <div className="tracks" style={{ width }} onMouseDown={onMouseDown} onDoubleClick={onDoubleClick} ref={tracks}>
         <div className="ruler">
           {ticks.map((t) => (
             <span key={t} style={{ left: x(t) - 3 }}>
@@ -452,6 +462,14 @@ export default function Timeline(p: Props) {
             <div className="mark-sel" style={{ left: x(p.selection.start), width: Math.max(2, x(p.selection.end - p.selection.start)) }}>
               <div className="sel-grip start" onMouseDown={(e) => dragSelection(e, "start")} title="Drag to change the start" />
               <div className="sel-grip end" onMouseDown={(e) => dragSelection(e, "end")} title="Drag to change the end" />
+              <button
+                className="sel-clear"
+                title="Clear the selection (Esc, or double-click the timeline)"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => p.onSelect(null)}
+              >
+                ✕
+              </button>
             </div>
           )}
           {p.highlights.map((h, i) => (
