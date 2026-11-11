@@ -61,6 +61,8 @@ export type ClipSpec = {
   motion: Keyframe[];
   /** The clip's own sound level: 0 mutes, 1 as recorded. */
   volume: number;
+  /** Stretches of its source whose own sound is silenced. */
+  mutes: Range[];
   denoise: Denoise;
   sounds: Sound[];
   overlays: Overlay[];
@@ -190,6 +192,8 @@ export type EditorApi = {
 
   volume: number;
   setVolume: (v: number) => void;
+  mutes: Range[];
+  setMutes: (m: Range[]) => void;
   denoise: Denoise;
   setDenoise: (d: Denoise) => void;
   sounds: Sound[];
@@ -267,6 +271,40 @@ export const heldFor = (t: Title, keep: Range[], outputDuration: number) =>
 
 /** The part of a title that runs on over later clips, in output time. */
 export type HeldTitle = { clip: string; start: number; end: number; title: Title };
+
+/** The output stretches a source range plays at, through the kept ranges. */
+export function placeRange(keep: Range[], r: Range): Range[] {
+  const out: Range[] = [];
+  let o = 0;
+  for (const k of keep) {
+    const [a, b] = [Math.max(k.start, r.start), Math.min(k.end, r.end)];
+    if (b > a) out.push({ start: o + a - k.start, end: o + b - k.start });
+    o += k.end - k.start;
+  }
+  return out;
+}
+
+/** `ranges` with `r` added, overlapping ones merged, in order. */
+export function addRange(ranges: Range[], r: Range): Range[] {
+  const all = [...ranges, r].sort((a, b) => a.start - b.start);
+  const out: Range[] = [];
+  for (const x of all) {
+    const last = out[out.length - 1];
+    if (last && x.start <= last.end + 1e-3) last.end = Math.max(last.end, x.end);
+    else out.push({ ...x });
+  }
+  return out;
+}
+
+/** `ranges` with `r` taken out of them. */
+export function removeRange(ranges: Range[], r: Range): Range[] {
+  return ranges.flatMap((x) =>
+    [
+      { start: x.start, end: Math.min(x.end, r.start) },
+      { start: Math.max(x.start, r.end), end: x.end },
+    ].filter((y) => y.end - y.start > 0.01),
+  );
+}
 
 /** The source moment that plays at `o` into the clip's output: the inverse
  * of `toOutput`. A join between kept ranges maps to the end of the first. */

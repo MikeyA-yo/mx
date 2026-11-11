@@ -1607,3 +1607,18 @@ body.resizing-y * {
 .side .row > .btn.grow {
   flex: 1 0 auto;
 }
+
+/* What can be done with a selection, in the transport bar */
+.sel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.sel-actions .btn,
+.sel-actions .mono {
+  flex: none;
+  white-space: nowrap;
+}

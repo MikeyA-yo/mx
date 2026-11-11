@@ -66,8 +66,26 @@ export default function AudioPanel({ ed }: { ed: EditorApi }) {
                 {ed.volume === 0 ? "Unmute" : "Mute"}
               </button>
             </div>
-            <span className="faint">Turn it down under a voiceover, or mute it for b-roll.</span>
+            <span className="faint">
+              Turn it down under a voiceover, or mute it for b-roll. To mute just part of it, select that part on the timeline and press Mute
+              (or <kbd>M</kbd>).
+            </span>
           </div>
+          {ed.mutes.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <span className="faint">Muted parts</span>
+              {ed.mutes.map((m, i) => (
+                <div className="stat-row" key={i}>
+                  <a href="#" onClick={(e) => (e.preventDefault(), ed.seek(Math.max(0, m.start - 1), true))}>
+                    {clock(m.start, true)} – {clock(m.end, true)}
+                  </a>
+                  <button className="btn small ghost" onClick={() => ed.setMutes(ed.mutes.filter((_, j) => j !== i))}>
+                    Unmute
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <NoisePanel ed={ed} />
         </>
       )}

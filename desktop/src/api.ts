@@ -210,6 +210,8 @@ export type ProjectClip = {
   source: string;
   keep: Range[];
   volume: number;
+  /** Stretches of the source whose own sound is silenced. */
+  mutes?: Range[];
   denoise?: Denoise;
   titles: Title[];
   /** Source-timed, without the lines deleted in the editor. */

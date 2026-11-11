@@ -40,6 +40,10 @@ pub struct Clip {
     /// 1.0 leaves the clip's own sound as it is; 0 mutes it.
     #[serde(default = "one")]
     pub volume: f64,
+    /// Stretches of the source whose own sound is silenced (its picture,
+    /// and any sounds over it, carry on).
+    #[serde(default)]
+    pub mutes: Vec<Range>,
     /// Background noise reduction on the clip's own sound.
     #[serde(default)]
     pub denoise: Denoise,
@@ -177,6 +181,7 @@ impl Clip {
             source: source.into(),
             keep: Vec::new(),
             volume: 1.0,
+            mutes: Vec::new(),
             denoise: Denoise::Off,
             titles: Vec::new(),
             transcript: None,

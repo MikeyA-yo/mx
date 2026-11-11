@@ -98,6 +98,8 @@ struct ClipPlan {
     /// Output length of this clip.
     duration: f64,
     volume: f64,
+    /// Silenced stretches, relative to the input like `cuts`.
+    mutes: Vec<Range>,
     /// Noise reduction for its sound, run before anything is cut, and the
     /// input holding the pause it learns from, when it learns from one.
     denoise: Option<(Denoiser, Option<usize>)>,
@@ -252,6 +254,11 @@ fn graph(plan: &Plan) -> Graph {
         if any_audio {
             let gain = if (c.volume - 1.0).abs() > 1e-6 { format!(",volume={:.3}", c.volume) } else { String::new() };
             let mut source = format!("{i}:a:0");
+            if c.audio && !c.mutes.is_empty() {
+                let when: Vec<String> = c.mutes.iter().map(|m| format!("between(t,{:.6},{:.6})", m.start, m.end)).collect();
+                g.parts.push(format!("[{source}]volume=0:enable='{}'[mu{i}]", when.join("+")));
+                source = format!("mu{i}");
+            }
             if let (Some((d, pause)), true) = (&c.denoise, c.audio) {
                 let pause = pause.map(|n| format!("{n}:a:0"));
                 g.parts.push(d.graph(&source, pause.as_deref(), &format!("dn{i}")));
@@ -527,6 +534,7 @@ pub fn render_project(project: &Project, subtitles: &[PathBuf], output: &Path, v
             audio: source.has_audio(),
             duration: length,
             volume: clip.volume.max(0.0),
+            mutes: clip.mutes.iter().filter(|m| m.end > m.start).map(|m| Range::new(m.start - seek, m.end - seek)).collect(),
             denoise: match (clip.denoise, source.has_audio()) {
                 (Denoise::Off, _) | (_, false) => None,
                 (d, true) => {
@@ -725,7 +733,7 @@ mod tests {
 
     fn clip(cuts: Option<Vec<Range>>, size: (u32, u32), audio: bool) -> ClipPlan {
         let duration = cuts.as_ref().map_or(10.0, |c| total(c));
-        ClipPlan { cuts, size: Some(size), audio, duration, volume: 1.0, denoise: None, transition: None, motion: None }
+        ClipPlan { cuts, size: Some(size), audio, duration, volume: 1.0, mutes: Vec::new(), denoise: None, transition: None, motion: None }
     }
 
     fn plan(clips: Vec<ClipPlan>) -> Plan {
@@ -759,6 +767,16 @@ mod tests {
         // Same size, no frame asked for: no scaling.
         assert!(!s.contains("scale"), "{s}");
         assert_eq!((g.video.as_deref(), g.audio.as_deref()), (Some("[vc0]"), Some("[ac0]")));
+    }
+
+    #[test]
+    fn muted_stretches_silence_the_clip_before_its_cuts() {
+        let mut c = clip(Some(vec![r(1.0, 2.0), r(3.0, 4.0)]), (320, 240), true);
+        c.mutes = vec![r(1.5, 3.5), r(6.0, 7.0)];
+        let s = graph(&plan(vec![c])).parts.join(";
+");
+        assert!(s.contains("[0:a:0]volume=0:enable='between(t,1.500000,3.500000)+between(t,6.000000,7.000000)'[mu0];"), "{s}");
+        assert!(s.contains("[mu0]asplit=2"), "{s}");
     }
 
     #[test]

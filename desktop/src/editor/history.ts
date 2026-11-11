@@ -22,6 +22,7 @@ const NAMES: Record<string, string> = {
   sounds: "sound",
   motion: "zoom and pan",
   volume: "clip volume",
+  mutes: "mute",
   denoise: "noise reduction",
   removePauses: "pause removal",
   padding: "breathing room",

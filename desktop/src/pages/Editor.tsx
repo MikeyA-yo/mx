@@ -39,7 +39,7 @@ import {
 import { TaskProgress } from "../components";
 import { BackIcon, PauseIcon, PlayIcon, RedoIcon, ScissorsIcon, UndoIcon } from "../icons";
 import { offerTour, startTour } from "../tour";
-import { baseName, bytes, clock, dirName, isImage, join, load, rememberProject, stem, store } from "../util";
+import { IMAGE_EXTENSIONS, baseName, bytes, clock, dirName, isImage, join, load, rememberProject, stem, store } from "../util";
 import RecentProjects from "../editor/RecentProjects";
 import Stage from "../editor/Stage";
 import Timeline from "../editor/Timeline";
@@ -75,8 +75,16 @@ import {
   type PlacedOverlay,
   type PlacedSound,
   type ProjectApi,
+  addRange,
   heldFor,
+  placeRange,
+  removeRange,
 } from "../editor/state";
+import { rememberLength } from "../editor/lengths";
+
+// What a selection's layer and sound buttons offer.
+const LAYER_EXTENSIONS = [...IMAGE_EXTENSIONS, "mp4", "mov", "mkv", "webm", "m4v", "avi", "gif"];
+const SOUND_EXTENSIONS = ["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "mp4", "mov", "webm", "mkv"];
 
 const MEDIA_EXTENSIONS = ["mp4", "mkv", "mov", "webm", "m4v", "avi", "flv", "ts", "mp3", "m4a", "wav", "flac", "ogg", "opus", "aac"];
 
@@ -127,6 +135,14 @@ type VideoTimeline = {
   trimBlock: (id: string, edge: "start" | "end", by: number) => void;
   /** Cuts a stretch of the output, from every clip it covers. */
   cut: (r: Range) => void;
+  /** The clips' muted stretches, in output time. */
+  mutes: Range[];
+  /** Mutes (or unmutes) the clips' own sound over a stretch of the output. */
+  mute: (r: Range, on: boolean) => void;
+  /** Text over a stretch of the output, running on across clips. */
+  addText: (r: Range) => void;
+  /** A file as a layer or sound over a stretch of the output. */
+  addFile: (r: Range, kind: "overlay" | "sound", path: string) => Promise<void>;
 };
 
 /** A clip in the project; `initial` restores a saved editor. */
@@ -135,6 +151,7 @@ type Saved = {
   titles: Title[];
   motion: Keyframe[];
   volume: number;
+  mutes: Range[];
   denoise: Denoise;
   sounds: Sound[];
   overlays: Overlay[];
@@ -210,6 +227,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
         titles: s.titles,
         motion: s.motion,
         volume: s.volume,
+        mutes: s.mutes,
         denoise: s.denoise,
         sounds: s.sounds,
         overlays: s.overlays,
@@ -392,6 +410,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
           titles: c.titles ?? [],
           motion: c.motion ?? [],
           volume: c.volume ?? 1,
+          mutes: c.mutes ?? [],
           denoise: c.denoise ?? "off",
           sounds: c.sounds ?? [],
           overlays: c.overlays ?? [],
@@ -747,6 +766,59 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
         return [{ id: c.id, key: "manualCuts", before: cuts, after: [...cuts, cut] }];
       });
       if (changes.length) commit(changes);
+    },
+    mutes: ordered.flatMap((c) => c.mutes.flatMap((m) => placeRange(c.keep, m).map((x) => ({ start: x.start + startOf(c), end: x.end + startOf(c) })))),
+    mute: (r, on) => {
+      const changes = ordered.flatMap((c) => {
+        const a = Math.max(r.start, startOf(c));
+        const b = Math.min(r.end, startOf(c) + c.outputDuration);
+        if (b - a < 0.02) return [];
+        const s = { start: sourceAt(c, a), end: sourceAt(c, b) };
+        return [{ id: c.id, key: "mutes", before: c.mutes, after: on ? addRange(c.mutes, s) : removeRange(c.mutes, s) }];
+      });
+      if (changes.length) commit(changes);
+    },
+    // Added in the clip the stretch starts in, and opened there.
+    addText: (r) => {
+      const c = clipAt(r.start + 1e-3);
+      if (!c) return;
+      const last = startOf(c) + c.outputDuration;
+      const runsOn = r.end > last + 0.05;
+      const title: Title = {
+        text: "Your text",
+        start: sourceAt(c, r.start),
+        end: sourceAt(c, runsOn ? last : r.end),
+        hold: runsOn ? r.end - last : 0,
+        x: 0.5,
+        y: 0.2,
+        size: 0.07,
+        color: "#ffffff",
+        font: "Arial",
+        boxed: false,
+      };
+      commit([{ id: c.id, key: "titles", before: c.titles, after: [...c.titles, title] }]);
+      seekVideo(r.start);
+      clipSetters.current[c.id]?.pickLayer?.({ kind: "title", index: c.titles.length } as never);
+    },
+    addFile: async (r, kind, path) => {
+      const c = clipAt(r.start + 1e-3);
+      if (!c) return;
+      const at = sourceAt(c, r.start);
+      const still = isImage(path);
+      const fileLength = still ? Infinity : (await probeMedia(path)).duration;
+      if (!still) rememberLength(path, fileLength);
+      const duration = Math.max(0.1, Math.min(r.end - r.start, fileLength));
+      const key = kind === "sound" ? "sounds" : "overlays";
+      const list = c[key] as (Overlay | Sound)[];
+      const item: Overlay | Sound =
+        kind === "sound"
+          ? { source: path, at, offset: 0, duration, volume: 1, fade_in: 0, fade_out: 0.3 }
+          : still
+            ? { ...imageLayer(path, at), duration }
+            : { source: path, at, offset: 0, duration, pip: null, volume: 0, fade: 0.2 };
+      commit([{ id: c.id, key, before: list, after: [...list, item] }]);
+      seekVideo(r.start);
+      clipSetters.current[c.id]?.pickLayer?.({ kind: kind === "sound" ? "sound" : "overlay", index: list.length } as never);
     },
   };
   // Every sound on the output, for the preview: each starts where its
@@ -1127,6 +1199,7 @@ function Workspace(p: WorkspaceProps) {
   const [skipCuts, setSkipCuts] = useState(saved?.skipCuts ?? true);
   const [motion, setMotion] = useState<Keyframe[]>(p.initial?.motion ?? []);
   const [volume, setVolume] = useState(p.initial?.volume ?? 1);
+  const [mutes, setMutes] = useState<Range[]>(p.initial?.mutes ?? []);
   const [denoise, setDenoise] = useState<Denoise>(p.initial?.denoise ?? "off");
   const [sounds, setSounds] = useState<Sound[]>(p.initial?.sounds ?? []);
   const soundEls = useRef<(HTMLAudioElement | null)[]>([]);
@@ -1153,6 +1226,7 @@ function Workspace(p: WorkspaceProps) {
     sounds: track("sounds", sounds, setSounds),
     motion: track("motion", motion, setMotion),
     volume: track("volume", volume, setVolume),
+    mutes: track("mutes", mutes, setMutes),
     denoise: track("denoise", denoise, setDenoise),
     removePauses: track("removePauses", removePauses, setRemovePauses),
     padding: track("padding", padding, setPadding),
@@ -1168,6 +1242,7 @@ function Workspace(p: WorkspaceProps) {
         sounds: setSounds,
         motion: setMotion,
         volume: setVolume,
+        mutes: setMutes,
         denoise: setDenoise,
         removePauses: setRemovePauses,
         padding: setPadding,
@@ -1331,12 +1406,13 @@ function Workspace(p: WorkspaceProps) {
         transition: null,
         motion,
         volume,
+        mutes,
         denoise,
         sounds,
         overlays,
         editor: { pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts },
       },
-    [media, plan, keptTranscript, titles, motion, volume, denoise, sounds, overlays, p.id, pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts],
+    [media, plan, keptTranscript, titles, motion, volume, mutes, denoise, sounds, overlays, p.id, pauses, removePauses, padding, manualCuts, transcript, removed, highlights, skipCuts],
   );
   const onSpec = p.onSpec;
   useEffect(() => {
@@ -1353,8 +1429,8 @@ function Workspace(p: WorkspaceProps) {
 
   // Playback clock, skipping what's cut, handing over to the next clip at
   // the end, and keeping the music in step.
-  const live = useRef({ plan, skipCuts, active: p.active, onEnded: p.onEnded, music: project.music, offset: p.outputOffset, sounds: p.placedSounds, volume, layers: p.placedOverlays });
-  live.current = { plan, skipCuts, active: p.active, onEnded: p.onEnded, music: project.music, offset: p.outputOffset, sounds: p.placedSounds, volume, layers: p.placedOverlays };
+  const live = useRef({ plan, skipCuts, active: p.active, onEnded: p.onEnded, music: project.music, offset: p.outputOffset, sounds: p.placedSounds, volume, mutes, layers: p.placedOverlays });
+  live.current = { plan, skipCuts, active: p.active, onEnded: p.onEnded, music: project.music, offset: p.outputOffset, sounds: p.placedSounds, volume, mutes, layers: p.placedOverlays };
   useEffect(() => {
     const v = video.current;
     if (!v) return;
@@ -1374,9 +1450,9 @@ function Workspace(p: WorkspaceProps) {
     };
     const step = () => {
       const t = v.currentTime;
-      const { plan, skipCuts, music, offset, sounds, volume, layers } = live.current;
+      const { plan, skipCuts, music, offset, sounds, volume, mutes, layers } = live.current;
       // The web view can't play louder than as recorded; the export can.
-      v.volume = Math.min(1, Math.max(0, volume));
+      v.volume = mutes.some((m) => t >= m.start && t < m.end) ? 0 : Math.min(1, Math.max(0, volume));
       // Sounds: each plays while the output clock is inside it, faded.
       const now = offset + toOutput(plan.keep, t);
       sounds.forEach((s, k) => {
@@ -1504,6 +1580,15 @@ function Workspace(p: WorkspaceProps) {
   // A split needs something kept on both sides of the playhead.
   const canSplit = toOutput(plan.keep, time) >= 0.1 && toOutput(plan.keep, time) <= plan.outputDuration - 0.1;
   const shownSelection = wholeVideo ? v.selection : selection;
+  const clearSelection = () => (wholeVideo ? v.setSelection(null) : setSelection(null));
+  // The selection in output time, which the whole-video edits work in.
+  const selectionOut = wholeVideo
+    ? v.selection
+    : selection && { start: p.outputOffset + toOutput(plan.keep, selection.start), end: p.outputOffset + toOutput(plan.keep, selection.end) };
+  const selectionMuted = !!shownSelection && (wholeVideo ? v.mutes : mutes).some((m) => m.start < shownSelection.end - 0.01 && m.end > shownSelection.start + 0.01);
+  const cutSelection = wholeVideo
+    ? v.selection && (() => (v.cut(v.selection!), v.setSelection(null)))
+    : selection && (() => (edit.manualCuts([...manualCuts, selection]), setSelection(null)));
 
   const togglePlay = () => {
     const v = video.current;
@@ -1544,6 +1629,7 @@ function Workspace(p: WorkspaceProps) {
     else if (k === "q" && time > 0.05) edit.manualCuts([...manualCuts, { start: 0, end: time }]);
     else if (k === "w" && time < media.duration - 0.05) edit.manualCuts([...manualCuts, { start: time, end: media.duration }]);
     else if (k === "s" && !e.ctrlKey && canSplit) p.onSplit(time);
+    else if (k === "m" && !e.ctrlKey && selectionOut) v.mute(selectionOut, !selectionMuted);
     else if (k === "escape") {
       setSelection(null);
       setLayer(null);
@@ -1589,6 +1675,8 @@ function Workspace(p: WorkspaceProps) {
           setMotion: edit.motion,
           volume,
           setVolume: edit.volume,
+          mutes,
+          setMutes: edit.mutes,
           denoise,
           setDenoise: edit.denoise,
           sounds,
@@ -1601,9 +1689,7 @@ function Workspace(p: WorkspaceProps) {
           spec,
           onExported: () => setExported(true),
           split: canSplit ? () => p.onSplit(time) : null,
-          cutSelection: wholeVideo
-            ? v.selection && (() => (v.cut(v.selection!), v.setSelection(null)))
-            : selection && (() => (edit.manualCuts([...manualCuts, selection]), setSelection(null))),
+          cutSelection,
           selectionLength: shownSelection ? shownSelection.end - shownSelection.start : 0,
         }
       : null;
@@ -1769,17 +1855,48 @@ function Workspace(p: WorkspaceProps) {
             )}
           </span>
           <span className="grow" />
-          {shownSelection ? (
-            <span className="muted mono" title="Press X to cut it out, Esc to clear">
-              {clock(shownSelection.start, true)}–{clock(shownSelection.end, true)} selected{" "}
+          {shownSelection && selectionOut ? (
+            <div className="sel-actions">
+              <span className="muted mono">
+                {clock(shownSelection.start, true)}–{clock(shownSelection.end, true)}
+              </span>
+              <button className="btn small" onClick={() => cutSelection?.()} title="Cut it out (X)">
+                Cut
+              </button>
               <button
-                className="btn small ghost"
-                onClick={() => (wholeVideo ? v.setSelection(null) : setSelection(null))}
-                title="Clear the selection (Esc, or double-click the timeline)"
+                className="btn small"
+                onClick={() => v.mute(selectionOut, !selectionMuted)}
+                title={selectionMuted ? "Bring back its sound (M)" : "Silence the clip's own sound here; the picture, music and sounds carry on (M)"}
               >
+                {selectionMuted ? "Unmute" : "Mute"}
+              </button>
+              <button className="btn small" onClick={() => (v.addText(selectionOut), clearSelection())} title="Text shown for exactly this stretch">
+                + Text
+              </button>
+              <button
+                className="btn small"
+                onClick={async () => {
+                  const path = await open({ filters: [{ name: "Image or video", extensions: LAYER_EXTENSIONS }], defaultPath: dirName(media.path) });
+                  if (typeof path === "string") await v.addFile(selectionOut, "overlay", path).then(clearSelection, (e) => setLoadError(errorText(e)));
+                }}
+                title="An image or video over the picture for exactly this stretch"
+              >
+                + Image/video
+              </button>
+              <button
+                className="btn small"
+                onClick={async () => {
+                  const path = await open({ filters: [{ name: "Audio (or a video's sound)", extensions: SOUND_EXTENSIONS }], defaultPath: dirName(media.path) });
+                  if (typeof path === "string") await v.addFile(selectionOut, "sound", path).then(clearSelection, (e) => setLoadError(errorText(e)));
+                }}
+                title="A sound or voiceover for this stretch (as long as the file allows)"
+              >
+                + Sound
+              </button>
+              <button className="btn small ghost" onClick={clearSelection} title="Clear the selection (Esc, or double-click the timeline)">
                 Clear
               </button>
-            </span>
+            </div>
           ) : (
             <span className="faint ellipsis">Click the timeline to jump · drag across it to select</span>
           )}
@@ -1842,6 +1959,7 @@ function Workspace(p: WorkspaceProps) {
               playing={playing}
               pictures={v.pictures}
               cuts={[]}
+              mutes={v.mutes}
               selection={v.selection}
               highlights={[]}
               keyframes={[]}
@@ -1867,6 +1985,7 @@ function Workspace(p: WorkspaceProps) {
               playing={playing}
               pictures={clipPictures}
               cuts={plan.cuts}
+              mutes={mutes}
               selection={selection}
               highlights={highlights ?? []}
               keyframes={motion.map((k) => k.time)}

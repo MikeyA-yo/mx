@@ -20,6 +20,7 @@ function projectClip(spec: ClipSpec, keep: Range[] = spec.keep): ProjectClip {
     source: spec.media.path,
     keep,
     volume: spec.volume,
+    mutes: spec.mutes,
     denoise: spec.denoise,
     titles: spec.titles,
     transcript: spec.transcript,

@@ -23,6 +23,8 @@ type Props = {
   pictures: Picture[];
   /** Drawn red: what's cut (the clip timeline). */
   cuts: Range[];
+  /** Stretches whose own sound is muted: drawn flat on the waveform. */
+  mutes?: Range[];
   selection: Range | null;
   highlights: Highlight[];
   /** Zoom/pan keyframe times. */
@@ -156,6 +158,7 @@ export default function Timeline(p: Props) {
     const step = Math.max(1, Math.round(2 * dpr));
     const span = (step / w) * p.duration;
     const isCut = (t: number) => p.cuts.some((r) => t >= r.start && t < r.end);
+    const isMuted = (t: number) => (p.mutes ?? []).some((r) => t >= r.start && t < r.end);
     ctx.globalAlpha = 0.85;
     for (let px = 0; px < w; px += step) {
       const t = (px / w) * p.duration;
@@ -166,11 +169,13 @@ export default function Timeline(p: Props) {
       const to = Math.max(from + 1, Math.min(from + Math.ceil(span * bins * 2), Math.floor(pic.toSource(Math.min(pic.end, t + span)) * bins)));
       let v = 0;
       for (let i = Math.max(0, from); i < to && i < pic.wave.length; i++) v = Math.max(v, pic.wave[i]);
-      const bar = Math.max(1, v * (h - 4));
-      ctx.fillStyle = isCut(t + span / 2) ? "#ff5470" : "#8a8fff";
+      const cut = isCut(t + span / 2);
+      const muted = !cut && isMuted(t + span / 2);
+      const bar = muted ? 2 * dpr : Math.max(1, v * (h - 4));
+      ctx.fillStyle = cut ? "#ff5470" : muted ? "#6b7080" : "#8a8fff";
       ctx.fillRect(px, (h - bar) / 2, Math.max(1, step - dpr), bar);
     }
-  }, [p.pictures, p.cuts, width, p.duration, heights.wave]);
+  }, [p.pictures, p.cuts, p.mutes, width, p.duration, heights.wave]);
 
   // Ruler ticks at a step that leaves room for their labels.
   const tickStep = TICK_STEPS.find((s) => s * pps >= 72) ?? 3600;

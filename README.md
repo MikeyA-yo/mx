@@ -257,7 +257,11 @@ end, as long as it plays after its cuts (a transition overlaps two), one
 playhead across them all, and play runs on from clip to clip. Click
 anywhere to jump there, in whichever clip plays it. Drag a clip's block to
 reorder it, or its edges to trim its start or end (the cut Q or W makes,
-moved). A selection can span clips: <kbd>X</kbd> cuts it from each one.
+moved). A selection can span clips, and what's done to it applies to each
+one: **Cut** (<kbd>X</kbd>) takes it out; **Mute** (<kbd>M</kbd>) silences the clips'
+own sound there (the picture, music and sounds carry on; muted stretches
+show flat on the waveform and are listed under Audio); **+ Text**,
+**+ Image/video** and **+ Sound** add a layer for exactly that stretch.
 Layers drag between clips too: text, b-roll or a sound dropped on another
 clip moves into it, at the moment under it. Any layer can also run on
 across cuts and into the clips after its own: drag its end edge past the
