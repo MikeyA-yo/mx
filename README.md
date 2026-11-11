@@ -218,7 +218,7 @@ the new place, its edits kept, or to remove that clip.
 - **Layers**: video or an image over the picture, started at a moment of a clip and
   shown for as long as you set, across later clips: full-frame b-roll
   (fitted like the clips) while the clip's voice carries on, or a
-  picture-in-picture box placed and sized on the frame. Muted unless you
+  picture-in-picture box dragged into place on the preview and resized by its corner. Muted unless you
   turn its sound up, faded in and out. An image (PNG, JPEG, WebP...)
   holds still for as long as it's set to show, and a PNG's transparency
   is kept, so a logo or sticker sits on the picture; images dropped on
@@ -276,10 +276,15 @@ edges snap to the playhead, the clip's ends, cuts and other layers, and
 <kbd>Ctrl</kbd>+wheel zooms around the pointer; the wheel scrolls a zoomed
 timeline.
 
+The side panel and the timeline resize like VS Code's panels: drag the
+divider at the panel's edge or the timeline's top (a taller timeline has a
+taller filmstrip and waveform); double-click it to reset. The sizes are kept.
+
 Each clip's preview, thumbnails and waveform are made a few at a time
 (the rest wait their turn in **Tasks**), so opening a project of many
 clips doesn't start dozens of ffmpegs at once; they're kept, so the next
-opening is quick.
+opening is quick. Closing the window stops whatever is still running,
+and a preview cut short is never mistaken for a finished one.
 
 **Undo** covers every edit in the project: cuts, transcript lines, layers,
 zoom and pan, volumes, the frame, captions, music, transitions, and adding,

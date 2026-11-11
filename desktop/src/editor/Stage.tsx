@@ -5,7 +5,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { CaptionStyle, Frame, MediaSummary, Segment, Title } from "../api";
+import type { CaptionStyle, Frame, MediaSummary, Pip, Segment, Title } from "../api";
 import type { PlacedOverlay } from "./state";
 import { isImage } from "../util";
 import { MusicIcon } from "../icons";
@@ -32,6 +32,11 @@ type Props = {
    * syncs the elements through `layerRefs`. */
   layers: PlacedOverlay[];
   layerRefs: React.RefObject<(HTMLDivElement | null)[]>;
+  /** The layer picked, by its place in `layers`. */
+  selectedLayer: number | null;
+  onPickLayer: (k: number) => void;
+  /** A box layer dragged to a new place or size. */
+  onMoveLayer: (k: number, pip: Pip) => void;
 };
 
 /** The cue showing at `t`, by binary search (cues are in time order). */
@@ -63,6 +68,32 @@ export default function Stage(p: Props) {
   const aspect = p.frame ? p.frame.aspect.w / p.frame.aspect.h : sourceAspect;
   const boxW = Math.max(40, Math.min(space.w, space.h * aspect));
   const boxH = boxW / aspect;
+  // A box layer: dragged by its middle to move it (its centre follows the
+  // pointer), by its corner to resize it.
+  const dragBox = (e: React.PointerEvent, k: number, from: Pip, how: "move" | "size") => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    p.onPickLayer(k);
+    const [x0, y0] = [e.clientX, e.clientY];
+    const move = (ev: PointerEvent) => {
+      const [dx, dy] = [(ev.clientX - x0) / boxW, (ev.clientY - y0) / boxH];
+      p.onMoveLayer(
+        k,
+        how === "move"
+          ? { ...from, x: Math.min(1, Math.max(0, from.x + dx)), y: Math.min(1, Math.max(0, from.y + dy)) }
+          : // Resized about its centre: the corner moves half as far as the width grows.
+            { ...from, size: Math.min(1, Math.max(0.05, from.size + 2 * dx)) },
+      );
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
   // How a title looks on the preview, as the export draws it.
   const look = (t: Title): React.CSSProperties => {
     const size = t.size * Math.min(boxW, boxH);
@@ -181,15 +212,17 @@ export default function Stage(p: Props) {
             <div
               key={`${k}-${o.src}`}
               ref={(el) => void (p.layerRefs.current[k] = el)}
-              className={`layer${full ? " full" : " pip"}${still ? " still" : ""}`}
+              className={`layer${full ? " full" : " pip"}${still ? " still" : ""}${p.selectedLayer === k ? " selected" : ""}`}
               style={
                 full
                   ? { background: fit === "blur" ? undefined : "black" }
                   : { left: o.pip!.x * boxW, top: o.pip!.y * boxH, width: o.pip!.size * boxW }
               }
+              onPointerDown={full ? undefined : (e) => dragBox(e, k, o.pip!, "move")}
             >
               {full && fit === "blur" && (still ? <img className="layer-bg" src={src} alt="" /> : <video className="layer-bg" src={src} preload="auto" muted />)}
               {still ? <img src={src} alt="" style={fitted} /> : <video src={src} preload="auto" muted={o.volume === 0} style={fitted} />}
+              {!full && <div className="layer-grip" title="Drag to resize" onPointerDown={(e) => dragBox(e, k, o.pip!, "size")} />}
             </div>
           );
         })}

@@ -234,6 +234,17 @@ async fn run_task<T: Send + 'static>(
     result.map_err(|e| if e.is::<Cancelled>() { "cancelled".to_string() } else { format!("{e:#}") })
 }
 
+/// Stop every task and give them a moment to clean up after themselves
+/// (killing ffmpeg, removing half-written files): the app is closing.
+pub fn stop_all(app: &AppHandle) {
+    let tasks = app.state::<Tasks>();
+    tasks.0.lock().unwrap().values().for_each(CancelToken::cancel);
+    let until = Instant::now() + Duration::from_secs(3);
+    while !tasks.0.lock().unwrap().is_empty() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[tauri::command]
 pub fn cancel_task(app: AppHandle, id: String) {
     if let Some(token) = app.state::<Tasks>().0.lock().unwrap().get(&id) {

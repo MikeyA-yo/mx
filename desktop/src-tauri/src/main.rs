@@ -55,6 +55,13 @@ fn main() {
             project::projects_dir,
             system::startup_files,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running mx");
+        .build(tauri::generate_context!())
+        .expect("error while running mx")
+        .run(|app, event| {
+            // Closing the window stops what's still running, rather than
+            // leaving ffmpeg working unseen.
+            if let tauri::RunEvent::Exit = event {
+                tasks::stop_all(app);
+            }
+        });
 }

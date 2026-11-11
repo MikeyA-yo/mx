@@ -79,7 +79,10 @@ pub async fn prepare_preview(app: AppHandle, task_id: String, path: String) -> R
     tasks::run_queued(app, task_id, "preview", title, move |task| {
         let source = probe(&input)?;
         let out = cache::path("preview", 1, &input, "mp4")?;
-        let (kind, job) = ops::preview(&input, &source, &out)?;
+        // Made under another name and renamed when done, so a copy cut
+        // short (by a crash, say) is never taken for a finished one.
+        let partial = out.with_extension("part.mp4");
+        let (kind, job) = ops::preview(&input, &source, &partial)?;
         let src = match job {
             None => path,
             Some(_) if out.is_file() => out.display().to_string(),
@@ -87,6 +90,7 @@ pub async fn prepare_preview(app: AppHandle, task_id: String, path: String) -> R
                 std::fs::create_dir_all(cache::dir())?;
                 let stage = if kind == PreviewKind::Remux { "remuxing" } else { "making a preview copy" };
                 task.run_job(stage, job)?;
+                std::fs::rename(&partial, &out)?;
                 out.display().to_string()
             }
         };
@@ -108,12 +112,14 @@ pub async fn filmstrip(app: AppHandle, task_id: String, path: String) -> Result<
             return Ok(None);
         }
         let out = cache::path("filmstrip", 2, &input, "jpg")?;
-        let (strip, job) = ops::filmstrip(&input, &source, &out, STRIP_COUNT, STRIP_HEIGHT)?;
+        let partial = out.with_extension("part.jpg");
+        let (strip, job) = ops::filmstrip(&input, &source, &partial, STRIP_COUNT, STRIP_HEIGHT)?;
         if !out.is_file() {
             std::fs::create_dir_all(cache::dir())?;
             task.run_job("thumbnails", job)?;
+            std::fs::rename(&partial, &out)?;
         }
-        Ok(Some(strip))
+        Ok(Some(ops::Filmstrip { path: out, ..strip }))
     })
     .await
 }

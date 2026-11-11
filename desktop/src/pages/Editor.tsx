@@ -28,6 +28,7 @@ import {
   type Music,
   type Range,
   type Overlay,
+  type Pip,
   type Segment,
   type Sound,
   type Title,
@@ -42,6 +43,7 @@ import { baseName, bytes, clock, dirName, isImage, join, load, rememberProject, 
 import RecentProjects from "../editor/RecentProjects";
 import Stage from "../editor/Stage";
 import Timeline from "../editor/Timeline";
+import { DEFAULT_LAYOUT, setLayout, Splitter, useLayout } from "../editor/layout";
 import CutPanel from "../editor/CutPanel";
 import TextPanel from "../editor/TextPanel";
 import OverlaysPanel from "../editor/OverlaysPanel";
@@ -515,6 +517,14 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
       { scope: id, key: "overlays", before: s.overlays, after: first.overlays },
     ]);
   };
+  // A box layer dragged on the preview of a later clip than its own.
+  const moveOverlay = (clip: string, index: number, pip: Pip) => {
+    const list = specs[clip]?.overlays;
+    if (!list?.[index]) return;
+    const next = list.map((o, i) => (i === index ? { ...o, pip } : o));
+    record([{ scope: clip, key: "overlays", before: list, after: next }]);
+    clipSetters.current[clip]?.overlays?.(next as never);
+  };
   /** The same clip again, edits and all, right after it. */
   const duplicate = (id: string) => {
     const c = clips.find((e) => e.id === id);
@@ -753,7 +763,9 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     });
   });
   const placedOverlays: PlacedOverlay[] = ordered.flatMap((spec) =>
-    spec.overlays.map((o) => ({
+    spec.overlays.map((o, index) => ({
+      clip: spec.id,
+      index,
       src: o.source,
       start: (offsets[spec.id] ?? 0) + toOutput(spec.keep, o.at),
       length: o.duration ?? (isImage(o.source) ? IMAGE_SECONDS : 0),
@@ -940,6 +952,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
             onEnded={() => onEnded(c.id)}
             onRelink={(found) => relink(c.id, found)}
             onSplit={(at) => split(c.id, at)}
+            onMoveOverlay={moveOverlay}
             onRemove={() => remove(c.id)}
             onClose={close}
           />
@@ -1061,6 +1074,8 @@ type WorkspaceProps = {
   onSplit: (at: number) => void;
   /** The clip's file was found somewhere else. */
   onRelink: (path: string) => void;
+  /** Moves or resizes another clip's box layer (one running on over this clip). */
+  onMoveOverlay: (clip: string, index: number, pip: Pip) => void;
   onRemove: () => void;
   onClose: () => void;
 };
@@ -1374,6 +1389,7 @@ function Workspace(p: WorkspaceProps) {
         const into = now - o.start;
         const inside = into >= 0 && into < o.length;
         box.style.opacity = inside ? String(Math.min(1, o.fade > 0 ? Math.min(into, o.length - into) / o.fade : 1)) : "0";
+        box.style.pointerEvents = inside && o.pip ? "auto" : "none";
         box.querySelectorAll("video").forEach((el) => {
           if (!inside) {
             if (!el.paused) el.pause();
@@ -1461,6 +1477,10 @@ function Workspace(p: WorkspaceProps) {
     setTime(q.t);
     if (q.play) el.play().catch(() => {});
   }, [p.seekTo?.n]);
+
+  // Panel sizes, shared by every clip.
+  const layout = useLayout();
+  const sideWidth = Math.min(layout.side, Math.max(260, window.innerWidth - 480));
 
   // Which timeline is showing; on the whole-video one, times are the output's.
   const v = p.video;
@@ -1646,7 +1666,7 @@ function Workspace(p: WorkspaceProps) {
   ];
 
   return (
-    <div className="editor">
+    <div className="editor" style={{ gridTemplateColumns: `minmax(0, 1fr) ${sideWidth}px` }}>
       <div className="editor-top">
         <button className="btn small ghost" onClick={p.onClose} title="Close the project">
           <BackIcon className="" />
@@ -1691,6 +1711,20 @@ function Workspace(p: WorkspaceProps) {
             view={motionAt(motion, time)}
             layers={p.placedOverlays}
             layerRefs={layerEls}
+            selectedLayer={(() => {
+              const k = p.placedOverlays.findIndex((o) => o.clip === p.id && layer?.kind === "overlay" && o.index === layer.index);
+              return k >= 0 ? k : null;
+            })()}
+            onPickLayer={(k) => {
+              const o = p.placedOverlays[k];
+              if (o?.clip === p.id) pickLayer({ kind: "overlay", index: o.index });
+            }}
+            onMoveLayer={(k, pip) => {
+              const o = p.placedOverlays[k];
+              if (!o) return;
+              if (o.clip === p.id) edit.overlays(overlays.map((l, i) => (i === o.index ? { ...l, pip } : l)));
+              else p.onMoveOverlay(o.clip, o.index, pip);
+            }}
           />
         ) : (
           <div className="stage-view">
@@ -1743,6 +1777,13 @@ function Workspace(p: WorkspaceProps) {
       </div>
 
       <aside className="side">
+        <Splitter
+          dir="x"
+          title="Drag to resize the panel; double-click to reset"
+          value={sideWidth}
+          onDrag={(start, moved) => setLayout({ side: Math.round(Math.min(window.innerWidth - 480, Math.max(260, start - moved))) })}
+          onReset={() => setLayout({ side: DEFAULT_LAYOUT.side })}
+        />
         <QuickStart steps={quickSteps} tab={tab} onTab={(t) => setTab(t as Tab)} />
         <div className="tabs">
           {tabs.map(([id, label, on, hint]) => (
@@ -1762,6 +1803,13 @@ function Workspace(p: WorkspaceProps) {
       </aside>
 
       <div className="timeline">
+        <Splitter
+          dir="y"
+          title="Drag to resize the timeline; double-click to reset"
+          value={layout.timeline}
+          onDrag={(start, moved) => setLayout({ timeline: Math.round(Math.min(window.innerHeight * 0.45, Math.max(-40, start - moved))) })}
+          onReset={() => setLayout({ timeline: DEFAULT_LAYOUT.timeline })}
+        />
         {p.sequence}
         <div data-tour="timeline">
           {!p.active ? null : wholeVideo ? (

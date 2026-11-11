@@ -12,6 +12,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Highlight, Range } from "../api";
 import { clock } from "../util";
 import { layerKey, type ClipBlock, type LayerBar, type LayerKind, type Picture } from "./state";
+import { trackHeights, useLayout } from "./layout";
 
 type Edge = "move" | "start" | "end";
 
@@ -46,7 +47,6 @@ type Props = {
   onTrimBlock?: (id: string, edge: "start" | "end", by: number) => void;
 };
 
-const STRIP_HEIGHT = 48;
 const TICK_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
 // Chromium refuses canvases wider than this.
 const MAX_CANVAS = 16384;
@@ -69,6 +69,7 @@ export default function Timeline(p: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const tracks = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const heights = trackHeights(useLayout().timeline);
   const [viewWidth, setViewWidth] = useState(800);
   // What's being dragged, drawn where it would land; nothing changes
   // until it's let go.
@@ -145,7 +146,7 @@ export default function Timeline(p: Props) {
     if (!c) return;
     const dpr = window.devicePixelRatio || 1;
     const w = Math.min(MAX_CANVAS, Math.round(width * dpr));
-    const h = Math.round(44 * dpr);
+    const h = Math.round(heights.wave * dpr);
     c.width = w;
     c.height = h;
     const ctx = c.getContext("2d")!;
@@ -167,7 +168,7 @@ export default function Timeline(p: Props) {
       ctx.fillStyle = isCut(t + span / 2) ? "#ff5470" : "#8a8fff";
       ctx.fillRect(px, (h - bar) / 2, Math.max(1, step - dpr), bar);
     }
-  }, [p.pictures, p.cuts, width, p.duration]);
+  }, [p.pictures, p.cuts, width, p.duration, heights.wave]);
 
   // Ruler ticks at a step that leaves room for their labels.
   const tickStep = TICK_STEPS.find((s) => s * pps >= 72) ?? 3600;
@@ -373,12 +374,12 @@ export default function Timeline(p: Props) {
             })}
           </div>
         )}
-        <div className="strip">
+        <div className="strip" style={{ height: heights.strip }}>
           {p.pictures.map((pic, i) => {
             const left = x(pic.start);
             const w = x(pic.end - pic.start);
             const tiles: { left: number; index: number }[] = [];
-            const tileWidth = pic.strip ? (STRIP_HEIGHT * pic.strip.thumb_width) / pic.strip.thumb_height : 0;
+            const tileWidth = pic.strip ? (heights.strip * pic.strip.thumb_width) / pic.strip.thumb_height : 0;
             if (pic.strip && tileWidth > 0) {
               for (let l = 0; l < w; l += tileWidth) {
                 const s = pic.toSource(pic.start + Math.min(w, l + tileWidth / 2) / pps);
@@ -395,7 +396,7 @@ export default function Timeline(p: Props) {
                       left: tile.left,
                       width: tileWidth,
                       backgroundImage: `url("${url}")`,
-                      backgroundSize: `${pic.strip!.count * tileWidth}px ${STRIP_HEIGHT}px`,
+                      backgroundSize: `${pic.strip!.count * tileWidth}px ${heights.strip}px`,
                       backgroundPosition: `${-tile.index * tileWidth}px 0`,
                     }}
                   />
@@ -404,7 +405,7 @@ export default function Timeline(p: Props) {
             );
           })}
         </div>
-        <canvas className="wave" ref={canvas} style={{ width }} />
+        <canvas className="wave" ref={canvas} style={{ width, height: heights.wave }} />
         <div className="lanes">
           {LANES.map(([kind, label]) => (
             <div key={kind} className={`lane lane-${kind}`}>

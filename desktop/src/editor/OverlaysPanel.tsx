@@ -125,6 +125,7 @@ export default function OverlaysPanel({ ed }: { ed: EditorApi }) {
                     Box
                   </button>
                 </div>
+                {o.pip && <p className="faint" style={{ margin: "0 0 8px" }}>Drag the box on the preview to place it, and its corner to resize it.</p>}
                 {o.pip && (
                   <>
                     {slider("Box size", o.pip.size, `${Math.round(o.pip.size * 100)}%`, 0.1, 0.9, 0.01, (size) => update(i, { pip: { ...o.pip!, size } }))}

@@ -118,7 +118,18 @@ export const imageLayer = (source: string, at: number): Overlay => ({
 });
 
 /** An overlay placed on the output, for previewing. */
-export type PlacedOverlay = { src: string; start: number; length: number; offset: number; pip: Pip | null; volume: number; fade: number };
+export type PlacedOverlay = {
+  /** The clip it belongs to, and its index there. */
+  clip: string;
+  index: number;
+  src: string;
+  start: number;
+  length: number;
+  offset: number;
+  pip: Pip | null;
+  volume: number;
+  fade: number;
+};
 
 /** A sound placed on the output, for previewing. */
 export type PlacedSound = { src: string; start: number; length: number; offset: number; volume: number; fadeIn: number; fadeOut: number };
