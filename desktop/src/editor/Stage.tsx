@@ -21,6 +21,8 @@ type Props = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   onLoaded: () => void;
   titles: Title[];
+  /** Text from earlier clips running on over this one: shown, not edited here. */
+  carried: Title[];
   selectedTitle: number | null;
   onSelectTitle: (i: number | null) => void;
   onMoveTitle: (i: number, x: number, y: number) => void;
@@ -61,6 +63,20 @@ export default function Stage(p: Props) {
   const aspect = p.frame ? p.frame.aspect.w / p.frame.aspect.h : sourceAspect;
   const boxW = Math.max(40, Math.min(space.w, space.h * aspect));
   const boxH = boxW / aspect;
+  // How a title looks on the preview, as the export draws it.
+  const look = (t: Title): React.CSSProperties => {
+    const size = t.size * Math.min(boxW, boxH);
+    return {
+      left: t.x * boxW,
+      top: t.y * boxH,
+      fontSize: size,
+      fontFamily: `"${t.font}", sans-serif`,
+      color: t.color,
+      background: t.boxed ? "rgba(0,0,0,0.69)" : undefined,
+      padding: t.boxed ? `${size * 0.12}px ${size * 0.3}px` : undefined,
+      WebkitTextStroke: t.boxed ? undefined : `${size * 0.14}px black`,
+    };
+  };
 
   // Blurred background: every new video frame, drawn small into a canvas
   // that CSS blurs and scales up, like the export's downscaled boxblur.
@@ -177,26 +193,20 @@ export default function Stage(p: Props) {
             </div>
           );
         })}
+        {p.carried.map((t, i) => (
+          <div key={`carried${i}`} className="title-preview" style={{ ...look(t), pointerEvents: "none" }}>
+            {t.text}
+          </div>
+        ))}
         {p.titles.map((t, i) => {
           const showing = p.time >= t.start && p.time < t.end;
           const selected = p.selectedTitle === i;
           if (!showing && !selected) return null;
-          const size = t.size * Math.min(boxW, boxH);
           return (
             <div
               key={i}
               className={`title-preview${selected ? " selected" : ""}`}
-              style={{
-                left: t.x * boxW,
-                top: t.y * boxH,
-                fontSize: size,
-                fontFamily: `"${t.font}", sans-serif`,
-                color: t.color,
-                opacity: showing ? 1 : 0.45,
-                background: t.boxed ? "rgba(0,0,0,0.69)" : undefined,
-                padding: t.boxed ? `${size * 0.12}px ${size * 0.3}px` : undefined,
-                WebkitTextStroke: t.boxed ? undefined : `${size * 0.14}px black`,
-              }}
+              style={{ ...look(t), opacity: showing ? 1 : 0.45 }}
               onPointerDown={(e) => {
                 // Drag to place: the title's centre follows the pointer.
                 e.preventDefault();

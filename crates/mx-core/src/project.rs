@@ -288,6 +288,10 @@ pub struct Title {
     /// On a dark box instead of with an outline.
     #[serde(default)]
     pub boxed: bool,
+    /// Seconds it stays up after its clip ends, over the clips after it.
+    /// Only for a title that runs to its clip's end.
+    #[serde(default)]
+    pub hold: f64,
 }
 
 /// Where one clip lands on the output timeline.
@@ -378,7 +382,8 @@ pub fn output_transcript(layout: &[Placement], transcripts: &[Option<Transcript>
 
 /// An ASS file drawing every clip's titles at their output times on a
 /// `width`x`height` frame. Titles on parts that were cut don't show; a
-/// title spanning a cut shows from its first kept moment to its last.
+/// title spanning a cut shows from its first kept moment to its last,
+/// and one running to its clip's end carries on for its `hold`.
 pub fn titles_ass(clips: &[Clip], layout: &[Placement], width: u32, height: u32) -> String {
     let short = width.min(height) as f64;
     let mut ass = format!(
@@ -403,13 +408,14 @@ pub fn titles_ass(clips: &[Clip], layout: &[Placement], width: u32, height: u32)
         for t in &clip.titles {
             let pieces = place.place(Range::new(t.start, t.end));
             let (Some(first), Some(last)) = (pieces.first(), pieces.last()) else { continue };
+            let held = if last.end >= place.offset + place.duration() - 0.01 { t.hold.max(0.0) } else { 0.0 };
             let size = (short * t.size).round().max(8.0);
             let (x, y) = ((t.x.clamp(0.0, 1.0) * width as f64).round(), (t.y.clamp(0.0, 1.0) * height as f64).round());
             let edge = if t.boxed { (size * 0.25).round() } else { (size * 0.07).round().max(1.0) };
             ass += &format!(
                 "Dialogue: 1,{},{},{},,0,0,0,,{{\\an5\\pos({x},{y})\\fn{}\\fs{size}\\bord{edge}\\1c{}&\\fad(150,150)}}{}\n",
                 ass_time(first.start),
-                ass_time(last.end),
+                ass_time(last.end + held),
                 if t.boxed { "Boxed" } else { "Title" },
                 t.font.replace(['{', '}', '\\'], ""),
                 ass_color(&t.color),
@@ -430,7 +436,7 @@ mod tests {
     }
 
     fn title(text: &str, start: f64, end: f64) -> Title {
-        Title { text: text.into(), start, end, x: 0.5, y: 0.2, size: 0.1, color: "#ffcc00".into(), font: "Impact".into(), boxed: false }
+        Title { text: text.into(), start, end, x: 0.5, y: 0.2, size: 0.1, color: "#ffcc00".into(), font: "Impact".into(), boxed: false, hold: 0.0 }
     }
 
     #[test]
@@ -492,5 +498,22 @@ mod tests {
         // The second title sits entirely in the cut part.
         assert!(!ass.contains("cut away"));
         assert_eq!(ass_color("nonsense"), "&H00FFFFFF");
+    }
+
+    #[test]
+    fn a_held_title_runs_on_over_the_next_clip() {
+        let mut a = Clip::new("a.mp4");
+        a.keep = vec![r(0.0, 2.0), r(5.0, 6.0)];
+        // Runs to the end (across the cut), then 1.5 s into the next clip.
+        let mut across = title("across", 1.0, 6.0);
+        across.hold = 1.5;
+        // Ends before its clip does: the hold doesn't apply.
+        let mut early = title("early", 0.0, 1.0);
+        early.hold = 5.0;
+        a.titles = vec![across, early];
+        let p = Project { clips: vec![a, Clip::new("b.mp4")], ..Project::default() };
+        let ass = titles_ass(&p.clips, &p.layout(&[10.0, 4.0]), 1080, 1920);
+        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:04.50,"), "{ass}");
+        assert!(ass.contains("Dialogue: 1,0:00:00.00,0:00:01.00,"), "{ass}");
     }
 }

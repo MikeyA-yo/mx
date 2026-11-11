@@ -96,6 +96,8 @@ let counter = 0;
 export const newTaskId = () => `t${Date.now().toString(36)}-${(counter++).toString(36)}`;
 
 export const cancelTask = (id: string) => invoke<void>("cancel_task", { id });
+/** Lets a queued task (a clip's preview, thumbnails or waveform) go now. */
+export const hurryTask = (id: string) => invoke<void>("hurry_task", { id });
 
 export const probeMedia = (path: string) => invoke<MediaSummary>("probe_media", { path });
 export const preparePreview = (taskId: string, path: string) => invoke<Preview>("prepare_preview", { taskId, path });
@@ -156,6 +158,9 @@ export type Title = {
   color: string;
   font: string;
   boxed: boolean;
+  /** Seconds it stays up after its clip ends, over the clips after it
+   * (for a title that runs to its clip's end). */
+  hold?: number;
 };
 
 export type Music = { source: string; offset: number; volume: number; duck: boolean; fade_out: number };

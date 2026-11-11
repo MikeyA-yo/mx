@@ -197,6 +197,9 @@ export type EditorApi = {
   /** Cuts what's selected on the timeline showing (across clips on the
    * whole video), or null when nothing is. */
   cutSelection: (() => void) | null;
+  /** Splits the clip in two at the playhead, or null when it can't be
+   * (nothing kept on one side). */
+  split: (() => void) | null;
   selectionLength: number;
 };
 
@@ -245,6 +248,14 @@ export type Picture = {
 
 /** A clip on the whole-video timeline. */
 export type ClipBlock = { id: string; n: number; label: string; start: number; end: number; active: boolean; transition: string | null };
+
+/** How long a title stays up past its clip's end: its hold, when it
+ * runs to the end (the engine's rule). */
+export const heldFor = (t: Title, keep: Range[], outputDuration: number) =>
+  t.hold && t.hold > 0 && toOutput(keep, t.end) >= outputDuration - 0.01 ? t.hold : 0;
+
+/** The part of a title that runs on over later clips, in output time. */
+export type HeldTitle = { clip: string; start: number; end: number; title: Title };
 
 /** The source moment that plays at `o` into the clip's output: the inverse
  * of `toOutput`. A join between kept ranges maps to the end of the first. */

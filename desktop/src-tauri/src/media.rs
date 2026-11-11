@@ -76,7 +76,7 @@ pub struct Preview {
 pub async fn prepare_preview(app: AppHandle, task_id: String, path: String) -> Result<Preview, String> {
     let input = PathBuf::from(&path);
     let title = format!("Preview of {}", file_name(&input));
-    tasks::run(app, task_id, "preview", title, move |task| {
+    tasks::run_queued(app, task_id, "preview", title, move |task| {
         let source = probe(&input)?;
         let out = cache::path("preview", 1, &input, "mp4")?;
         let (kind, job) = ops::preview(&input, &source, &out)?;
@@ -102,7 +102,7 @@ const STRIP_HEIGHT: u32 = 60;
 pub async fn filmstrip(app: AppHandle, task_id: String, path: String) -> Result<Option<ops::Filmstrip>, String> {
     let input = PathBuf::from(&path);
     let title = format!("Thumbnails of {}", file_name(&input));
-    tasks::run(app, task_id, "preview", title, move |task| {
+    tasks::run_queued(app, task_id, "preview", title, move |task| {
         let source = probe(&input)?;
         if source.video().is_none() {
             return Ok(None);
@@ -130,7 +130,7 @@ fn envelope(input: &Path, task: &mut Task) -> Result<Envelope> {
 pub async fn waveform(app: AppHandle, task_id: String, path: String, bins: usize) -> Result<Vec<f32>, String> {
     let input = PathBuf::from(&path);
     let title = format!("Waveform of {}", file_name(&input));
-    tasks::run(app, task_id, "analyse", title, move |task| {
+    tasks::run_queued(app, task_id, "analyse", title, move |task| {
         let source = probe(&input)?;
         let bins = bins.clamp(1, 20_000);
         if !source.has_audio() {

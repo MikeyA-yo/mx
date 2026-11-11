@@ -25,6 +25,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             tasks::cancel_task,
+            tasks::hurry_task,
             media::probe_media,
             media::prepare_preview,
             media::filmstrip,

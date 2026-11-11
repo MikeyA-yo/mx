@@ -259,7 +259,10 @@ anywhere to jump there, in whichever clip plays it. Drag a clip's block to
 reorder it, or its edges to trim its start or end (the cut Q or W makes,
 moved). A selection can span clips: <kbd>X</kbd> cuts it from each one.
 Layers drag between clips too: text, b-roll or a sound dropped on another
-clip moves into it, at the moment under it. **This clip** switches to one
+clip moves into it, at the moment under it. Any layer can also run on
+across cuts and into the clips after its own: drag its end edge past the
+clip's end (text holds on screen for the rest, sounds and videos keep
+playing). **This clip** switches to one
 clip in its own time, with what's cut still shown in red, for precise
 trimming; edits there are the same edits.
 
@@ -272,6 +275,11 @@ edges snap to the playhead, the clip's ends, cuts and other layers, and
 <kbd>Delete</kbd> removes it. A selection's edges drag too.
 <kbd>Ctrl</kbd>+wheel zooms around the pointer; the wheel scrolls a zoomed
 timeline.
+
+Each clip's preview, thumbnails and waveform are made a few at a time
+(the rest wait their turn in **Tasks**), so opening a project of many
+clips doesn't start dozens of ffmpegs at once; they're kept, so the next
+opening is quick.
 
 **Undo** covers every edit in the project: cuts, transcript lines, layers,
 zoom and pan, volumes, the frame, captions, music, transitions, and adding,

@@ -161,6 +161,7 @@ fn renders_a_project_of_mismatched_clips_with_music_and_a_title() {
         color: "#ffffff".into(),
         font: "Arial".into(),
         boxed: true,
+        hold: 0.0,
     }];
     let project = Project {
         clips: vec![first, second],

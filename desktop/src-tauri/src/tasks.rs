@@ -5,8 +5,8 @@
 //! `task` events (one stream for downloads, exports and analysis alike)
 //! that the task list and the panels render.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -117,6 +117,77 @@ pub async fn run<T: Send + 'static>(
     title: String,
     work: impl FnOnce(&mut Task) -> Result<T> + Send + 'static,
 ) -> Result<T, String> {
+    run_task(app, id, kind, title, false, work).await
+}
+
+/// Like [`run`], but waits its turn: what every clip asks for as it
+/// loads (its preview, thumbnails and waveform). A project of many clips
+/// asks for all of them at once, and dozens of ffmpegs sharing the CPU
+/// would each crawl.
+pub async fn run_queued<T: Send + 'static>(
+    app: AppHandle,
+    id: String,
+    kind: &'static str,
+    title: String,
+    work: impl FnOnce(&mut Task) -> Result<T> + Send + 'static,
+) -> Result<T, String> {
+    run_task(app, id, kind, title, true, work).await
+}
+
+/// Queued tasks running now, and a signal when one finishes.
+static SLOTS: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
+
+/// Queued tasks that go now, waiting or not: the clip on screen's.
+static HURRIED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+fn hurried(id: &str) -> bool {
+    HURRIED.lock().unwrap().as_ref().is_some_and(|h| h.contains(id))
+}
+
+/// Let a queued task skip the queue: it's for what's on screen.
+#[tauri::command]
+pub fn hurry_task(id: String) {
+    HURRIED.lock().unwrap().get_or_insert_with(HashSet::new).insert(id);
+}
+
+/// A queued task's turn; the next one's starts when it's dropped.
+struct Slot;
+
+impl Slot {
+    fn take(task: &mut Task) -> Result<Slot> {
+        let at_once = std::thread::available_parallelism().map_or(2, |n| n.get() / 2).clamp(2, 4);
+        let (busy, freed) = &SLOTS;
+        let mut busy = busy.lock().unwrap();
+        if *busy >= at_once {
+            task.progress("waiting for other tasks", None, None);
+        }
+        while *busy >= at_once && !hurried(&task.update.id) {
+            if task.cancel.is_cancelled() {
+                return Err(Cancelled.into());
+            }
+            busy = freed.wait_timeout(busy, Duration::from_millis(200)).unwrap().0;
+        }
+        *busy += 1;
+        Ok(Slot)
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let (busy, freed) = &SLOTS;
+        *busy.lock().unwrap() -= 1;
+        freed.notify_one();
+    }
+}
+
+async fn run_task<T: Send + 'static>(
+    app: AppHandle,
+    id: String,
+    kind: &'static str,
+    title: String,
+    queued: bool,
+    work: impl FnOnce(&mut Task) -> Result<T> + Send + 'static,
+) -> Result<T, String> {
     let cancel = CancelToken::new();
     app.state::<Tasks>().0.lock().unwrap().insert(id.clone(), cancel.clone());
     let update = TaskUpdate {
@@ -134,11 +205,17 @@ pub async fn run<T: Send + 'static>(
     task.send();
 
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        let result = work(&mut task);
+        let result = (|| {
+            let _turn = if queued { Some(Slot::take(&mut task)?) } else { None };
+            work(&mut task)
+        })();
         (task, result)
     })
     .await;
     app.state::<Tasks>().0.lock().unwrap().remove(&id);
+    if let Some(h) = HURRIED.lock().unwrap().as_mut() {
+        h.remove(&id);
+    }
     let (mut task, result) = joined.map_err(|e| format!("task crashed: {e}"))?;
 
     task.update.detail = None;

@@ -59,6 +59,7 @@ export default function TitlesPanel({ ed }: { ed: EditorApi }) {
                     <span>Show for</span>
                     <span>
                       {(t.end - t.start).toFixed(1)} s, until {clock(t.end, true)}
+                      {(t.hold ?? 0) > 0 && `, then ${t.hold!.toFixed(1)} s into the next clips`}
                     </span>
                   </label>
                   <input
@@ -67,14 +68,14 @@ export default function TitlesPanel({ ed }: { ed: EditorApi }) {
                     max={Math.max(0.3, Math.min(30, ed.media.duration - t.start))}
                     step={0.1}
                     value={t.end - t.start}
-                    onChange={(e) => update(i, { end: t.start + Number(e.target.value) })}
+                    onChange={(e) => update(i, { end: t.start + Number(e.target.value), hold: 0 })}
                   />
                 </div>
                 <div className="row" style={{ marginBottom: 4 }}>
                   <button className="btn small grow" onClick={() => update(i, { start: Math.min(ed.time, t.end - 0.1) })} title="It appears where the playhead is">
                     Start at playhead
                   </button>
-                  <button className="btn small grow" onClick={() => update(i, { end: Math.max(ed.time, t.start + 0.1) })} title="It disappears where the playhead is">
+                  <button className="btn small grow" onClick={() => update(i, { end: Math.max(ed.time, t.start + 0.1), hold: 0 })} title="It disappears where the playhead is">
                     End at playhead
                   </button>
                 </div>

@@ -150,6 +150,18 @@ export default function CutPanel({ ed }: { ed: EditorApi }) {
           Cut after playhead <kbd>W</kbd>
         </button>
       </div>
+      <button
+        className="btn small wide"
+        style={{ marginTop: 8 }}
+        disabled={!ed.split}
+        title="Make two clips of this one at the playhead (S), to use its parts in any order"
+        onClick={() => ed.split?.()}
+      >
+        Split at playhead <kbd>S</kbd>
+      </button>
+      <p className="faint" style={{ margin: "6px 0 0" }}>
+        Splitting makes two clips of the same video: drag them apart on the whole-video timeline, or split again for a third part.
+      </p>
       <div style={{ marginTop: 10 }}>
         {ed.manualCuts.map((c, i) => (
           <div className="stat-row" key={i}>
