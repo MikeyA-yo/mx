@@ -120,15 +120,21 @@ export default function TitlesPanel({ ed }: { ed: EditorApi }) {
                     <span>Box</span>
                   </label>
                 </div>
-                <button
-                  className="btn small ghost danger"
-                  onClick={() => {
-                    ed.setTitles(titles.filter((_, j) => j !== i));
-                    ed.setSelectedTitle(null);
-                  }}
-                >
-                  Delete
-                </button>
+                <div className="row">
+                  <button
+                    className="btn small ghost danger"
+                    onClick={() => {
+                      ed.setTitles(titles.filter((_, j) => j !== i));
+                      ed.setSelectedTitle(null);
+                    }}
+                  >
+                    Delete
+                  </button>
+                  <span className="grow" />
+                  <button className="btn small primary" onClick={() => ed.setSelectedTitle(null)} title="Close these settings (Esc)">
+                    Done
+                  </button>
+                </div>
               </div>
             )}
           </div>

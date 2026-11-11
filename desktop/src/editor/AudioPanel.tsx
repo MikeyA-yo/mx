@@ -171,6 +171,10 @@ export default function AudioPanel({ ed }: { ed: EditorApi }) {
                   >
                     Delete
                   </button>
+                  <span className="grow" />
+                  <button className="btn small primary" onClick={() => setSelected(null)} title="Close these settings (Esc)">
+                    Done
+                  </button>
                 </div>
               </div>
             )}
