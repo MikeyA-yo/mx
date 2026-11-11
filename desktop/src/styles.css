@@ -538,16 +538,20 @@ h3.section {
   flex-direction: column;
   min-height: 0;
 }
+/* Too narrow for every tab: they scroll sideways rather than squash. */
 .tabs {
   display: flex;
   border-bottom: 1px solid var(--line);
   padding: 0 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 .tabs button {
-  flex: 1;
+  flex: 1 0 auto;
   border: 0;
   background: none;
-  padding: 11px 0 9px;
+  padding: 11px 7px 9px;
+  white-space: nowrap;
   color: var(--muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
@@ -1579,4 +1583,16 @@ body.resizing-y * {
 }
 .sel-clear:hover {
   filter: brightness(1.15);
+}
+
+/* A narrow side panel: buttons side by side go onto the next line when
+   they no longer fit, instead of squashing their labels. */
+.side .row {
+  flex-wrap: wrap;
+}
+.side .row > .btn {
+  flex-shrink: 0;
+}
+.side .row > .btn.grow {
+  flex: 1 0 auto;
 }
