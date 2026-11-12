@@ -66,9 +66,20 @@ export default function AudioPanel({ ed }: { ed: EditorApi }) {
                 {ed.volume === 0 ? "Unmute" : "Mute"}
               </button>
             </div>
+            {ed.volumeForAll && (
+              <button
+                className="btn small wide"
+                style={{ margin: "6px 0" }}
+                title="Give every clip in the project this clip's sound level"
+                onClick={() => ed.volumeForAll?.(ed.volume)}
+              >
+                {ed.volume === 0 ? "Mute all clips" : `Set all clips to ${pct(ed.volume)}`}
+              </button>
+            )}
             <span className="faint">
-              Turn it down under a voiceover, or mute it for b-roll. To mute just part of it, select that part on the timeline and press Mute
-              (or <kbd>M</kbd>).
+              Turn it down under a voiceover, or mute it for b-roll. This is just this clip's sound: the button above gives every clip the
+              same. To mute just part of the video, select that part on the timeline and press Mute (or <kbd>M</kbd>); on the whole video
+              that works across clips.
             </span>
           </div>
           {ed.mutes.length > 0 && (

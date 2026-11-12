@@ -44,6 +44,7 @@ import RecentProjects from "../editor/RecentProjects";
 import Stage from "../editor/Stage";
 import Timeline from "../editor/Timeline";
 import { DEFAULT_LAYOUT, setLayout, Splitter, useLayout } from "../editor/layout";
+import Arrange from "../editor/Arrange";
 import CutPanel from "../editor/CutPanel";
 import TextPanel from "../editor/TextPanel";
 import OverlaysPanel from "../editor/OverlaysPanel";
@@ -143,6 +144,11 @@ type VideoTimeline = {
   addText: (r: Range) => void;
   /** A file as a layer or sound over a stretch of the output. */
   addFile: (r: Range, kind: "overlay" | "sound", path: string) => Promise<void>;
+  /** How many clips a clip makes when split at its cuts. */
+  pieces: (id: string) => number;
+  splitAtCuts: (ids: string[]) => void;
+  /** Every clip's own sound level, as one step. */
+  volumeForAll: (v: number) => void;
 };
 
 /** A clip in the project; `initial` restores a saved editor. */
@@ -208,6 +214,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
   const [videoZoom, setVideoZoom] = useState(1);
   const [videoSelection, setVideoSelection] = useState<Range | null>(null);
   const [seekTo, setSeekTo] = useState<{ id: string; t: number; play: boolean; n: number } | null>(null);
+  const [arranging, setArranging] = useState(false);
 
   // Undo: each clip registers its setters by id, so a step can be put back
   // even into a clip that was removed and has come back.
@@ -482,68 +489,119 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
-  const remove = (id: string) => {
-    const i = clips.findIndex((c) => c.id === id);
-    const rest = clips.filter((c) => c.id !== id);
-    const { [id]: _, ...otherTransitions } = transitions;
+  const remove = (ids: string[]) => {
+    const gone = new Set(ids);
+    const i = clips.findIndex((c) => c.id === active);
+    const rest = clips.filter((c) => !gone.has(c.id));
+    const otherTransitions = Object.fromEntries(Object.entries(transitions).filter(([id]) => !gone.has(id)));
     record([
       { scope: "project", key: "clips", before: clips, after: rest },
       { scope: "project", key: "transitions", before: transitions, after: otherTransitions },
     ]);
     setClips(rest);
-    setSpecs(({ [id]: _, ...others }) => others);
-    setTransitions(({ [id]: _, ...others }) => others);
-    if (active === id) setActive(rest[Math.min(i, rest.length - 1)]?.id ?? null);
+    setSpecs((all) => Object.fromEntries(Object.entries(all).filter(([id]) => !gone.has(id))));
+    setTransitions(otherTransitions);
+    // The clip on screen, if it went, gives way to the next one left.
+    if (active && gone.has(active)) setActive((clips.slice(i).find((c) => !gone.has(c.id)) ?? rest[rest.length - 1])?.id ?? null);
   };
-  /** Puts `entry` into the project right after clip `id`, as one undo
-   * step with `also` (edits to the clips already there). */
-  const insertAfter = (id: string, entry: ClipEntry, also: Change[] = []) => {
+  /** The clips in a new order, by id. */
+  const reorder = (order: string[]) => {
+    const next = order.map((id) => clips.find((c) => c.id === id)).filter((c): c is ClipEntry => !!c);
+    if (next.length !== clips.length || next.every((c, i) => c === clips[i])) return;
+    record([{ scope: "project", key: "clips", before: clips, after: next }]);
+    setClips(next);
+  };
+  /** Puts `entry` into the project right after clip `id`. */
+  const insertAfter = (id: string, entry: ClipEntry) => {
     const i = clips.findIndex((c) => c.id === id);
     const next = [...clips.slice(0, i + 1), entry, ...clips.slice(i + 1)];
-    record([{ scope: "project", key: "clips", before: clips, after: next }, ...also]);
-    also.forEach((c) => clipSetters.current[c.scope]?.[c.key]?.(c.after as never));
+    record([{ scope: "project", key: "clips", before: clips, after: next }]);
     setClips(next);
     setActive(entry.id);
     history.seal();
   };
-  // Splitting a clip at a moment of its file makes two clips of the same
-  // file: the first keeps what's before, the second what's after, and
-  // each can go anywhere. Layers go with the part they start in, and
-  // text running over the split holds on into the second part; all of it
-  // is timed on the file, so nothing moves.
+  // Splitting a clip at moments of its file makes clips of the same file,
+  // one for each stretch between the moments, and each can go anywhere.
+  // Layers go with the part they start in, and text running over a split
+  // holds on into the parts after; all of it is timed on the file, so
+  // nothing moves.
+  const piecesOf = (s: Saved, spec: ClipSpec, points: number[]): Saved[] => {
+    const d = spec.media.duration;
+    const bounds = [0, ...points, d];
+    const last = points.length;
+    return bounds.slice(0, -1).map((from, j) => {
+      const to = bounds[j + 1];
+      const inside = (t: number) => (j === 0 || t >= from) && (j === last || t < to);
+      const into = toOutput(spec.keep, to);
+      const titles = s.titles
+        .filter((t) => inside(t.start))
+        .map((t) => (j < last && t.end > to ? { ...t, hold: toOutput(spec.keep, t.end) - into + heldFor(t, spec.keep, spec.outputDuration) } : t));
+      const manualCuts = [...s.editor.manualCuts];
+      if (j > 0) manualCuts.push({ start: 0, end: from });
+      if (j < last) manualCuts.push({ start: to, end: d });
+      return {
+        ...s,
+        editor: { ...s.editor, manualCuts },
+        titles,
+        sounds: s.sounds.filter((l) => inside(l.at)),
+        overlays: s.overlays.filter((l) => inside(l.at)),
+      };
+    });
+  };
+  /** Splits clips at moments of their files, as one undo step. Each clip
+   * stays as its first part, with the rest right after it. */
+  const splitClips = (at: Record<string, number[]>) => {
+    const also: Change[] = [];
+    const next = clips.flatMap((c) => {
+      const s = lastSaved.current[c.id];
+      const spec = specs[c.id];
+      const points = at[c.id];
+      if (!s || !spec || !points?.length) return [c];
+      const [first, ...rest] = piecesOf(s, spec, points);
+      for (const key of ["titles", "sounds", "overlays"] as const) also.push({ scope: c.id, key, before: s[key], after: first[key] });
+      also.push({ scope: c.id, key: "manualCuts", before: s.editor.manualCuts, after: first.editor.manualCuts });
+      return [c, ...rest.map((initial) => ({ id: newTaskId(), path: c.path, initial }))];
+    });
+    if (!also.length) return next;
+    record([{ scope: "project", key: "clips", before: clips, after: next }, ...also]);
+    also.forEach((c) => clipSetters.current[c.scope]?.[c.key]?.(c.after as never));
+    setClips(next);
+    history.seal();
+    return next;
+  };
   const split = (id: string, at: number) => {
-    const c = clips.find((e) => e.id === id);
-    const s = lastSaved.current[id];
     const spec = specs[id];
-    if (!c || !s || !spec) return;
+    if (!spec) return;
     const into = toOutput(spec.keep, at);
     if (into < 0.1 || into > spec.outputDuration - 0.1) return;
-    const d = spec.media.duration;
-    const early = <T,>(list: T[], start: (l: T) => number) => list.filter((l) => start(l) < at);
-    const late = <T,>(list: T[], start: (l: T) => number) => list.filter((l) => start(l) >= at);
-    const titles = early(s.titles, (t) => t.start).map((t) =>
-      t.end > at ? { ...t, hold: toOutput(spec.keep, t.end) - into + heldFor(t, spec.keep, spec.outputDuration) } : t,
-    );
-    const first = {
-      manualCuts: [...s.editor.manualCuts, { start: at, end: d }],
-      titles,
-      sounds: early(s.sounds, (l) => l.at),
-      overlays: early(s.overlays, (l) => l.at),
-    };
-    const second: Saved = {
-      ...s,
-      editor: { ...s.editor, manualCuts: [...s.editor.manualCuts, { start: 0, end: at }] },
-      titles: late(s.titles, (t) => t.start),
-      sounds: late(s.sounds, (l) => l.at),
-      overlays: late(s.overlays, (l) => l.at),
-    };
-    insertAfter(id, { id: newTaskId(), path: c.path, initial: second }, [
-      { scope: id, key: "manualCuts", before: s.editor.manualCuts, after: first.manualCuts },
-      { scope: id, key: "titles", before: s.titles, after: first.titles },
-      { scope: id, key: "sounds", before: s.sounds, after: first.sounds },
-      { scope: id, key: "overlays", before: s.overlays, after: first.overlays },
-    ]);
+    const next = splitClips({ [id]: [at] });
+    // On to the second part, where the playhead is.
+    setActive(next[next.findIndex((c) => c.id === id) + 1]?.id ?? id);
   };
+  /** Where a clip splits into the parts kept between its own cuts: at the
+   * start of each cut with something kept on both sides. */
+  const cutPoints = (spec: ClipSpec) => {
+    const cuts = [...spec.editor.manualCuts].sort((a, b) => a.start - b.start);
+    const points: number[] = [];
+    let reach = -1;
+    let kept = 0;
+    for (const r of cuts) {
+      // Overlapping cuts are one cut.
+      if (r.start <= reach) {
+        reach = Math.max(reach, r.end);
+        continue;
+      }
+      reach = r.end;
+      const into = toOutput(spec.keep, r.start);
+      if (into >= kept + 0.1 && into <= spec.outputDuration - 0.1) {
+        points.push(r.start);
+        kept = into;
+      }
+    }
+    return points;
+  };
+  const splitAtCuts = (ids: string[]) =>
+    splitClips(Object.fromEntries(ids.flatMap((id) => (specs[id] ? [[id, cutPoints(specs[id])]] : []))));
   // A box layer dragged on the preview of a later clip than its own.
   const moveOverlay = (clip: string, index: number, pip: Pip) => {
     const list = specs[clip]?.overlays;
@@ -820,6 +878,12 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
       seekVideo(r.start);
       clipSetters.current[c.id]?.pickLayer?.({ kind: kind === "sound" ? "sound" : "overlay", index: list.length } as never);
     },
+    pieces: (id) => (specs[id] ? cutPoints(specs[id]).length + 1 : 1),
+    splitAtCuts,
+    volumeForAll: (volume) => {
+      const changes = ordered.filter((c) => c.volume !== volume).map((c) => ({ id: c.id, key: "volume", before: c.volume, after: volume }));
+      if (changes.length) commit(changes);
+    },
   };
   // Every sound on the output, for the preview: each starts where its
   // clip's moment plays and runs its length, past the clip if it's long.
@@ -918,7 +982,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
             <button title="Duplicate: the same clip again, right after it" onClick={(e) => (e.stopPropagation(), duplicate(c.id))}>
               ⧉
             </button>
-            <button title="Remove from the project" onClick={(e) => (e.stopPropagation(), remove(c.id))}>
+            <button title="Remove from the project" onClick={(e) => (e.stopPropagation(), remove([c.id]))}>
               ✕
             </button>
           </div>
@@ -929,6 +993,11 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
         + Add clip
       </button>
     </div>
+      {clips.length > 1 && (
+        <button className="btn small arrange-open" onClick={() => setArranging(true)} title="See every clip at once and put them in order">
+          Arrange
+        </button>
+      )}
       <div className="chips view-switch" data-tour="view-switch">
         <button className={`chip${mode === "video" ? " on" : ""}`} onClick={() => setMode("video")} title="All the clips end to end, as the export plays them">
           Whole video
@@ -991,6 +1060,33 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
 
   return (
     <>
+      {arranging && (
+        <Arrange
+          items={clips.map((c) => {
+            const spec = specs[c.id];
+            return {
+              id: c.id,
+              name: baseName(c.path),
+              length: spec?.outputDuration ?? null,
+              strip: assets[c.id]?.strip ?? null,
+              at: spec?.keep[0]?.start ?? 0,
+              sourceDuration: spec?.media.duration ?? 1,
+              pieces: spec ? cutPoints(spec).length + 1 : 1,
+            };
+          })}
+          active={active}
+          total={offset}
+          onOrder={reorder}
+          onSplit={splitAtCuts}
+          onRemove={remove}
+          onOpen={(id) => {
+            setActive(id);
+            setMode("clip");
+            setArranging(false);
+          }}
+          onClose={() => setArranging(false)}
+        />
+      )}
       {preview && (
         <div className="modal" onClick={() => setPreview(null)}>
           <div className="card" onClick={(e) => e.stopPropagation()}>
@@ -1040,7 +1136,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
             onRelink={(found) => relink(c.id, found)}
             onSplit={(at) => split(c.id, at)}
             onMoveOverlay={moveOverlay}
-            onRemove={() => remove(c.id)}
+            onRemove={() => remove([c.id])}
             onClose={close}
           />
         </div>
@@ -1689,6 +1785,9 @@ function Workspace(p: WorkspaceProps) {
           spec,
           onExported: () => setExported(true),
           split: canSplit ? () => p.onSplit(time) : null,
+          splitAtCuts: v.pieces(p.id) > 1 ? () => v.splitAtCuts([p.id]) : null,
+          pieces: v.pieces(p.id),
+          volumeForAll: v.blocks.length > 1 ? v.volumeForAll : null,
           cutSelection,
           selectionLength: shownSelection ? shownSelection.end - shownSelection.start : 0,
         }

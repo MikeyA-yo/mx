@@ -1622,3 +1622,106 @@ body.resizing-y * {
   flex: none;
   white-space: nowrap;
 }
+
+/* Arrange: every clip at a glance, dragged into order. */
+.sequence-bar .arrange-open {
+  flex: none;
+}
+.modal .card.arrange {
+  width: calc(100vw - 48px);
+  max-width: 1400px;
+  height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.arrange-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.arrange-actions .btn {
+  white-space: nowrap;
+}
+.arrange-place {
+  width: 56px;
+}
+.arrange-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 150px);
+  gap: 12px;
+  align-content: start;
+  padding: 2px 8px 8px 8px;
+  user-select: none;
+}
+.arrange-card {
+  position: relative;
+  width: 150px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--raised);
+  cursor: grab;
+  font-size: 12px;
+  overflow: visible;
+}
+.arrange-card:hover {
+  border-color: var(--faint);
+}
+.arrange-card.active {
+  border-color: var(--muted);
+}
+.arrange-card.picked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.arrange-card.lifted {
+  opacity: 0.4;
+}
+.arrange-card.drop-before::before,
+.arrange-card.drop-after::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.arrange-card.drop-before::before {
+  left: -8px;
+}
+.arrange-card.drop-after::after {
+  right: -8px;
+}
+.arrange-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background: black;
+  border-radius: 7px 7px 0 0;
+  overflow: hidden;
+}
+.arrange-tile {
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+.arrange-n,
+.arrange-parts {
+  position: absolute;
+  top: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.arrange-n {
+  left: 4px;
+}
+.arrange-parts {
+  right: 4px;
+  color: var(--warn);
+}

@@ -183,7 +183,11 @@ edit on a timeline and export once.
 
 A project is a row of clips. Add files with **+ Add clip** (or drop
 several on the window), reorder them in the clip bar, and pick one to
-edit it. Each clip keeps its own cuts, transcript and titles in its own
+edit it. With many clips, **Arrange** shows them all as a grid of
+pictures: drag one (or several picked with Ctrl or Shift) to its place,
+or send them to the start, the end or a numbered place. A clip splits at
+the playhead (<kbd>S</kbd>), or at every cut at once, into clips of the
+same file, one for each part kept, ready to be spread out. Each clip keeps its own cuts, transcript and titles in its own
 time, so reordering or recutting never strands a title; the frame,
 caption style and music belong to the whole project. Playback runs on
 from one clip into the next, with the music in step. Between clips, the
@@ -233,7 +237,7 @@ the new place, its edits kept, or to remove that clip.
   keyframes of zoom and position, eased between (a `scale` evaluated per
   frame, then a `crop` that follows the keyframed point).
 - **Audio**: each clip's own sound from muted to 200% (turn it down
-  under a voiceover, mute it for b-roll). **Background noise** reduction per
+  under a voiceover, mute it for b-roll), for one clip or all of them. **Background noise** reduction per
   clip: *Light* plays a pause from the recording (found by the loudness
   analysis) to an FFT denoiser (`afftdn`) first, so it knows the room's
   hum before the clip starts, and takes about 10 dB off it with the voice

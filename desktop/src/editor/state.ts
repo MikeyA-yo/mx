@@ -215,6 +215,13 @@ export type EditorApi = {
   /** Splits the clip in two at the playhead, or null when it can't be
    * (nothing kept on one side). */
   split: (() => void) | null;
+  /** Makes a clip of each part kept between the clip's own cuts, or null
+   * when there's only one part. */
+  splitAtCuts: (() => void) | null;
+  /** How many clips that would make. */
+  pieces: number;
+  /** Sets every clip's own sound level, or null with only one clip. */
+  volumeForAll: ((v: number) => void) | null;
   selectionLength: number;
 };
 
