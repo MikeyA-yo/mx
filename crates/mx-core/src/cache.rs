@@ -27,6 +27,12 @@ pub fn path(kind: &str, version: u32, input: &Path, ext: &str) -> Result<PathBuf
     Ok(dir().join(format!("{kind}-{:016x}.{ext}", key.finish())))
 }
 
+/// The cached `kind` value for `input`, if there is one.
+pub fn get<T: DeserializeOwned>(kind: &str, version: u32, input: &Path) -> Option<T> {
+    let bytes = std::fs::read(path(kind, version, input, "json").ok()?).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 /// The cached `kind` value for `input`, or `compute`'s result, stored for
 /// next time. A failed write only costs the next run its speed-up.
 pub fn json<T: Serialize + DeserializeOwned>(
@@ -35,10 +41,10 @@ pub fn json<T: Serialize + DeserializeOwned>(
     input: &Path,
     compute: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    let path = path(kind, version, input, "json")?;
-    if let Some(value) = std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()) {
+    if let Some(value) = get(kind, version, input) {
         return Ok(value);
     }
+    let path = path(kind, version, input, "json")?;
     let value = compute()?;
     if std::fs::create_dir_all(dir()).is_ok()
         && let Ok(bytes) = serde_json::to_vec(&value)

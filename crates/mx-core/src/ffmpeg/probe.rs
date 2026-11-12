@@ -108,3 +108,19 @@ pub fn probe(path: &Path) -> Result<Probe> {
     }
     serde_json::from_slice(&out.stdout).context("ffprobe returned unexpected JSON")
 }
+
+/// The average time between the video's keyframes, from the container's
+/// packet flags (nothing is decoded, so it takes a moment even on a long
+/// file). `None` when it has no video or no keyframes.
+pub fn keyframe_gap(path: &Path, duration: f64) -> Result<Option<f64>> {
+    let out = crate::process::command(super::tool("ffprobe"))
+        .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "packet=flags", "-of", "csv=p=0"])
+        .arg(path)
+        .output()
+        .context("failed to run ffprobe (is ffmpeg installed and on PATH?)")?;
+    if !out.status.success() {
+        bail!("ffprobe: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    let keys = String::from_utf8_lossy(&out.stdout).lines().filter(|l| l.starts_with('K')).count();
+    Ok((keys > 0).then(|| duration / keys as f64))
+}

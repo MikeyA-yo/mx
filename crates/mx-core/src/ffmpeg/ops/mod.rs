@@ -22,7 +22,7 @@ pub use clip::{Frame, clip};
 pub use compress::{Compress, CompressCodec, CompressOutcome, CompressPlan, compress, plan_compression};
 pub use gif::{GifOptions, gif};
 pub use jumpcut::jumpcut;
-pub use preview::{Filmstrip, PreviewKind, filmstrip, preview};
+pub use preview::{Filmstrip, PreviewKind, filmstrip, keyframes_suffice, preview};
 pub use reframe::{Aspect, Fit, reframe};
 pub use remux::{Remux, SubtitlePlan, remux, remux_with};
 pub use render::{Edit, Render, render, render_project};

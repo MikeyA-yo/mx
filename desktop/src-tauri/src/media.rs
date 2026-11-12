@@ -2,6 +2,8 @@
 //! timeline's filmstrip and waveform, and the analyses that propose cuts.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use mx_core::analysis::{
@@ -9,7 +11,8 @@ use mx_core::analysis::{
 };
 use mx_core::cache;
 use mx_core::ffmpeg::ops::{self, PreviewKind};
-use mx_core::ffmpeg::probe;
+use mx_core::ffmpeg::{Job, Probe, probe};
+use mx_core::{CancelToken, Cancelled};
 use mx_core::project::Denoise;
 use mx_core::speech::{self, CaptionStyle, Segment, Transcript};
 use mx_core::timeline::{Range, keep_ranges, total};
@@ -42,7 +45,7 @@ pub struct MediaSummary {
 pub async fn probe_media(path: String) -> Result<MediaSummary, String> {
     blocking(move || {
         let input = PathBuf::from(&path);
-        let p = probe(&input)?;
+        let p = probe_kept(&input)?;
         let duration = p.duration_secs().ok_or_else(|| anyhow!("couldn't read the duration"))?;
         let v = p.video();
         let codec = |kind: &str| {
@@ -72,17 +75,71 @@ pub struct Preview {
     src: String,
 }
 
+/// What's in a file, kept on disk by the file's size and time modified:
+/// every clip asks several times as it loads, clips split from one file
+/// ask the same, and reopening a project of many clips would otherwise
+/// run ffprobe hundreds of times.
+fn probe_kept(input: &Path) -> Result<Probe> {
+    cache::json("probe", 1, input, || probe(input))
+}
+
+/// Cache entries being made now: clips split from one file load together,
+/// and the second waits for the first's result instead of making it again.
+static MAKING: (Mutex<Vec<PathBuf>>, Condvar) = (Mutex::new(Vec::new()), Condvar::new());
+
+struct Making(PathBuf);
+
+impl Making {
+    fn claim(entry: &Path, cancel: &CancelToken) -> Result<Making> {
+        let (busy, done) = &MAKING;
+        let mut busy = busy.lock().unwrap();
+        while busy.iter().any(|p| p == entry) {
+            if cancel.is_cancelled() {
+                return Err(Cancelled.into());
+            }
+            busy = done.wait_timeout(busy, Duration::from_millis(200)).unwrap().0;
+        }
+        busy.push(entry.to_path_buf());
+        Ok(Making(entry.to_path_buf()))
+    }
+}
+
+impl Drop for Making {
+    fn drop(&mut self) {
+        let (busy, done) = &MAKING;
+        busy.lock().unwrap().retain(|p| p != &self.0);
+        done.notify_all();
+    }
+}
+
+/// How `input` previews, the copy to make if it needs one, and where that
+/// copy goes. It's made under another name and renamed when done, so a
+/// copy cut short (by a crash, say) is never taken for a finished one.
+fn preview_plan(input: &Path) -> Result<(PreviewKind, Option<Job>, PathBuf)> {
+    let source = probe_kept(input)?;
+    let out = cache::path("preview", 1, input, "mp4")?;
+    let (kind, job) = ops::preview(input, &source, &out.with_extension("part.mp4"))?;
+    Ok((kind, job, out))
+}
+
 #[tauri::command]
 pub async fn prepare_preview(app: AppHandle, task_id: String, path: String) -> Result<Preview, String> {
     let input = PathBuf::from(&path);
     let title = format!("Preview of {}", file_name(&input));
-    tasks::run_queued(app, task_id, "preview", title, move |task| {
-        let source = probe(&input)?;
-        let out = cache::path("preview", 1, &input, "mp4")?;
-        // Made under another name and renamed when done, so a copy cut
-        // short (by a crash, say) is never taken for a finished one.
-        let partial = out.with_extension("part.mp4");
-        let (kind, job) = ops::preview(&input, &source, &partial)?;
+    let ready = {
+        let (input, path) = (input.clone(), path.clone());
+        move || {
+            let (kind, job, out) = preview_plan(&input).ok()?;
+            match job {
+                None => Some(Preview { kind, src: path }),
+                Some(_) if out.is_file() => Some(Preview { kind, src: out.display().to_string() }),
+                Some(_) => None,
+            }
+        }
+    };
+    tasks::run_queued_unless(app, task_id, "preview", title, ready, move |task| {
+        let (kind, job, out) = preview_plan(&input)?;
+        let _making = Making::claim(&out, &task.cancel)?;
         let src = match job {
             None => path,
             Some(_) if out.is_file() => out.display().to_string(),
@@ -90,7 +147,7 @@ pub async fn prepare_preview(app: AppHandle, task_id: String, path: String) -> R
                 std::fs::create_dir_all(cache::dir())?;
                 let stage = if kind == PreviewKind::Remux { "remuxing" } else { "making a preview copy" };
                 task.run_job(stage, job)?;
-                std::fs::rename(&partial, &out)?;
+                std::fs::rename(out.with_extension("part.mp4"), &out)?;
                 out.display().to_string()
             }
         };
@@ -102,30 +159,53 @@ pub async fn prepare_preview(app: AppHandle, task_id: String, path: String) -> R
 const STRIP_COUNT: u32 = 64;
 const STRIP_HEIGHT: u32 = 60;
 
+/// The filmstrip already made for `input`, or `Some(None)` when it has
+/// no video to show.
+fn filmstrip_made(input: &Path) -> Result<Option<Option<ops::Filmstrip>>> {
+    let source = probe_kept(input)?;
+    if source.video().is_none() {
+        return Ok(Some(None));
+    }
+    let out = cache::path("filmstrip", 2, input, "jpg")?;
+    if !out.is_file() {
+        return Ok(None);
+    }
+    let (strip, _) = ops::filmstrip(input, &source, &out, STRIP_COUNT, STRIP_HEIGHT, false)?;
+    Ok(Some(Some(strip)))
+}
+
 #[tauri::command]
 pub async fn filmstrip(app: AppHandle, task_id: String, path: String) -> Result<Option<ops::Filmstrip>, String> {
     let input = PathBuf::from(&path);
     let title = format!("Thumbnails of {}", file_name(&input));
-    tasks::run_queued(app, task_id, "preview", title, move |task| {
-        let source = probe(&input)?;
+    let ready = {
+        let input = input.clone();
+        move || filmstrip_made(&input).ok().flatten()
+    };
+    tasks::run_queued_unless(app, task_id, "preview", title, ready, move |task| {
+        let source = probe_kept(&input)?;
         if source.video().is_none() {
             return Ok(None);
         }
         let out = cache::path("filmstrip", 2, &input, "jpg")?;
-        let partial = out.with_extension("part.jpg");
-        let (strip, job) = ops::filmstrip(&input, &source, &partial, STRIP_COUNT, STRIP_HEIGHT)?;
+        let _making = Making::claim(&out, &task.cancel)?;
         if !out.is_file() {
             std::fs::create_dir_all(cache::dir())?;
+            let partial = out.with_extension("part.jpg");
+            let keyframes = ops::keyframes_suffice(&input, &source);
+            let (_, job) = ops::filmstrip(&input, &source, &partial, STRIP_COUNT, STRIP_HEIGHT, keyframes)?;
             task.run_job("thumbnails", job)?;
             std::fs::rename(&partial, &out)?;
         }
-        Ok(Some(ops::Filmstrip { path: out, ..strip }))
+        let (strip, _) = ops::filmstrip(&input, &source, &out, STRIP_COUNT, STRIP_HEIGHT, false)?;
+        Ok(Some(strip))
     })
     .await
 }
 
 /// The loudness envelope, measured once per file.
 fn envelope(input: &Path, task: &mut Task) -> Result<Envelope> {
+    let _making = Making::claim(&cache::path("loudness", 1, input, "json")?, &task.cancel)?;
     cache::json("loudness", 1, input, || {
         let cancel = task.cancel.clone();
         analysis::measure_loudness(input, &cancel, |p| task.ffmpeg("measuring loudness", p))
@@ -136,9 +216,20 @@ fn envelope(input: &Path, task: &mut Task) -> Result<Envelope> {
 pub async fn waveform(app: AppHandle, task_id: String, path: String, bins: usize) -> Result<Vec<f32>, String> {
     let input = PathBuf::from(&path);
     let title = format!("Waveform of {}", file_name(&input));
-    tasks::run_queued(app, task_id, "analyse", title, move |task| {
-        let source = probe(&input)?;
-        let bins = bins.clamp(1, 20_000);
+    let bins = bins.clamp(1, 20_000);
+    let ready = {
+        let input = input.clone();
+        move || {
+            let source = probe_kept(&input).ok()?;
+            if !source.has_audio() {
+                return Some(vec![0.0; bins]);
+            }
+            let envelope: Envelope = cache::get("loudness", 1, &input)?;
+            Some(envelope.overview(source.duration_secs().unwrap_or(0.0), bins))
+        }
+    };
+    tasks::run_queued_unless(app, task_id, "analyse", title, ready, move |task| {
+        let source = probe_kept(&input)?;
         if !source.has_audio() {
             return Ok(vec![0.0; bins]);
         }
@@ -264,7 +355,7 @@ pub async fn preview_denoise(app: AppHandle, task_id: String, path: String, star
     let input = PathBuf::from(&path);
     let title = format!("Previewing noise reduction on {}", file_name(&input));
     tasks::run(app, task_id, "preview", title, move |task| {
-        let duration = probe(&input)?.duration_secs().unwrap_or(0.0);
+        let duration = probe_kept(&input)?.duration_secs().unwrap_or(0.0);
         let length = DENOISE_PREVIEW_SECS.min(duration);
         let start = start.clamp(0.0, (duration - length).max(0.0));
         let dir = cache::dir();

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use mx_core::CancelToken;
 use mx_core::ffmpeg::encoders::Encoder;
-use mx_core::ffmpeg::ops::{Aspect, Edit, Fit, Frame, PreviewKind, VideoEncode, filmstrip, preview, render};
+use mx_core::ffmpeg::ops::{Aspect, Edit, Fit, Frame, PreviewKind, VideoEncode, filmstrip, keyframes_suffice, preview, render};
 use mx_core::ffmpeg::{Job, probe, version};
 use mx_core::speech::{CaptionStyle, Segment, Transcript, cues, to_ass};
 use mx_core::temp::TempFile;
@@ -117,7 +117,7 @@ fn previews_mkv_by_remuxing_and_makes_a_filmstrip() {
     assert!((vd - 10.0).abs() < 0.1);
 
     let strip_path = dir.join("strip.jpg");
-    let (strip, job) = filmstrip(&input, &src, &strip_path, 10, 36).unwrap();
+    let (strip, job) = filmstrip(&input, &src, &strip_path, 10, 36, keyframes_suffice(&input, &src)).unwrap();
     job.overwrite(true).run(&CancelToken::new(), |_| {}).unwrap();
     let img = probe(&strip_path).unwrap();
     let v = img.video().unwrap();

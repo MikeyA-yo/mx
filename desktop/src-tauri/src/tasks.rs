@@ -134,6 +134,27 @@ pub async fn run_queued<T: Send + 'static>(
     run_task(app, id, kind, title, true, work).await
 }
 
+/// Like [`run_queued`], but asks `ready` first for a result made before
+/// (by an earlier run, kept on disk): one comes straight back, with no
+/// task to show and no turn to wait for. Reopening a project of many
+/// clips is mostly this.
+pub async fn run_queued_unless<T: Send + 'static>(
+    app: AppHandle,
+    id: String,
+    kind: &'static str,
+    title: String,
+    ready: impl FnOnce() -> Option<T> + Send + 'static,
+    work: impl FnOnce(&mut Task) -> Result<T> + Send + 'static,
+) -> Result<T, String> {
+    if let Ok(Some(done)) = tauri::async_runtime::spawn_blocking(ready).await {
+        if let Some(h) = HURRIED.lock().unwrap().as_mut() {
+            h.remove(&id);
+        }
+        return Ok(done);
+    }
+    run_queued(app, id, kind, title, work).await
+}
+
 /// Queued tasks running now, and a signal when one finishes.
 static SLOTS: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
 

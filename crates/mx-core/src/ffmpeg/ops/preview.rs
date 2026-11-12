@@ -78,6 +78,24 @@ pub fn preview(input: &Path, source: &Probe, output: &Path) -> Result<(PreviewKi
 
 /// Files longer than this (seconds) are thumbnailed from keyframes only.
 const KEYFRAMES_ONLY_AFTER: f64 = 60.0;
+/// Shorter files are too, past this length, when their keyframes come at
+/// least this often (seconds): a phone's video has one every second or
+/// so, a thumbnail for each of them.
+const KEYFRAMES_OFTEN_AFTER: f64 = 10.0;
+const KEYFRAMES_OFTEN: f64 = 1.5;
+
+/// Whether `input`'s keyframes alone make a good filmstrip: many times
+/// faster than decoding every frame (8 s down to 1.5 s for a 45-second
+/// 1080p phone clip). Looks at the file's keyframes when it has to.
+pub fn keyframes_suffice(input: &Path, source: &Probe) -> bool {
+    match source.duration_secs() {
+        Some(d) if d > KEYFRAMES_ONLY_AFTER => true,
+        Some(d) if d > KEYFRAMES_OFTEN_AFTER => {
+            crate::ffmpeg::probe::keyframe_gap(input, d).ok().flatten().is_some_and(|g| g <= KEYFRAMES_OFTEN)
+        }
+        _ => false,
+    }
+}
 
 /// A row of evenly spaced thumbnails in one image.
 #[derive(Debug, Clone, Serialize)]
@@ -89,11 +107,12 @@ pub struct Filmstrip {
 }
 
 /// Render `count` thumbnails `height` pixels tall across `input` into one
-/// JPEG, side by side. On long files only keyframes are decoded, which is
-/// many times faster than decoding every frame and plenty for a timeline
-/// overview. Short files are decoded whole: a clip with one keyframe
-/// would otherwise give one thumbnail and a black strip.
-pub fn filmstrip(input: &Path, source: &Probe, output: &Path, count: u32, height: u32) -> Result<(Filmstrip, Job)> {
+/// JPEG, side by side. With `keyframes_only` (see [`keyframes_suffice`])
+/// only keyframes are decoded, which is many times faster than decoding
+/// every frame and plenty for a timeline overview; otherwise every frame
+/// is, so a clip with one keyframe doesn't give one thumbnail and a black
+/// strip.
+pub fn filmstrip(input: &Path, source: &Probe, output: &Path, count: u32, height: u32, keyframes_only: bool) -> Result<(Filmstrip, Job)> {
     let Some(v) = source.video() else {
         bail!("{} has no video", input.display());
     };
@@ -103,7 +122,7 @@ pub fn filmstrip(input: &Path, source: &Probe, output: &Path, count: u32, height
     let (w, h) = (v.width.unwrap_or(16), v.height.unwrap_or(9));
     let thumb_width = ((height as f64 * w as f64 / h.max(1) as f64 / 2.0).round() as u32).max(1) * 2;
     let mut job = Job::new(output);
-    if duration > KEYFRAMES_ONLY_AFTER {
+    if keyframes_only {
         job = job.args(["-skip_frame", "nokey"]);
     }
     let job = job
@@ -166,11 +185,18 @@ mod tests {
     #[test]
     fn filmstrip_thumbs_keep_the_aspect_ratio() {
         let src = source(vec![stream("video", "h264", Some("yuv420p"))]);
-        let (strip, job) = filmstrip(Path::new("a.mp4"), &src, Path::new("s.jpg"), 40, 72).unwrap();
+        let (strip, job) = filmstrip(Path::new("a.mp4"), &src, Path::new("s.jpg"), 40, 72, false).unwrap();
         assert_eq!((strip.thumb_width, strip.thumb_height), (128, 72));
         let s = super::super::args_of(&job);
         assert!(s.contains("fps=40/60.000,scale=128:72") && s.contains("tile=40x1"), "{s}");
-        // A minute is short enough to decode every frame.
         assert!(!s.contains("skip_frame"), "{s}");
+        let (_, job) = filmstrip(Path::new("a.mp4"), &src, Path::new("s.jpg"), 40, 72, true).unwrap();
+        assert!(super::super::args_of(&job).contains("-skip_frame nokey"));
+        // A minute is short enough to decode every frame, without looking
+        // at the keyframes; longer isn't.
+        assert!(!keyframes_suffice(Path::new("missing.mp4"), &src));
+        let mut long = src.clone();
+        long.format.duration = Some("61".into());
+        assert!(keyframes_suffice(Path::new("missing.mp4"), &long));
     }
 }
