@@ -111,8 +111,9 @@ const overlapOf = (t: Transition | null, before: number, after: number) => {
   return d < 0.04 ? 0 : d;
 };
 
-/** A clip's filmstrip and waveform, shared for the whole-video timeline. */
-type Assets = { strip: Filmstrip | null; wave: number[] | null };
+/** A clip's filmstrip, waveform and playable preview, shared for the
+ * whole-video timeline and Arrange. */
+type Assets = { strip: Filmstrip | null; wave: number[] | null; src: string | null };
 type Edge = "move" | "start" | "end";
 
 /** The whole-video timeline: what it shows, in output time, and the
@@ -994,7 +995,7 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
       </button>
     </div>
       {clips.length > 1 && (
-        <button className="btn small arrange-open" onClick={() => setArranging(true)} title="See every clip at once and put them in order">
+        <button className="btn small arrange-open" onClick={() => (clipSetters.current[active ?? ""]?.pause?.(undefined as never), setArranging(true))} title="See every clip at once and put them in order">
           Arrange
         </button>
       )}
@@ -1069,9 +1070,12 @@ export default function EditorPage({ request, onOpen, onClips }: Props) {
               name: baseName(c.path),
               length: spec?.outputDuration ?? null,
               strip: assets[c.id]?.strip ?? null,
-              at: spec?.keep[0]?.start ?? 0,
+              keep: spec?.keep ?? [],
               sourceDuration: spec?.media.duration ?? 1,
               pieces: spec ? cutPoints(spec).length + 1 : 1,
+              src: assets[c.id]?.src ?? null,
+              volume: spec?.volume ?? 1,
+              mutes: spec?.mutes ?? [],
             };
           })}
           active={active}
@@ -1348,6 +1352,7 @@ function Workspace(p: WorkspaceProps) {
           if (l) setTab(l.kind === "sound" ? "audio" : "titles");
         },
         addImages: (paths: string[]) => addImagesRef.current(paths),
+        pause: () => video.current?.pause(),
       }),
     [p.id, register],
   );
@@ -1401,7 +1406,7 @@ function Workspace(p: WorkspaceProps) {
     [media, strip, wave],
   );
   const { onAssets } = p;
-  useEffect(() => onAssets(p.id, { strip, wave }), [strip, wave, onAssets, p.id]);
+  useEffect(() => onAssets(p.id, { strip, wave, src }), [strip, wave, src, onAssets, p.id]);
 
   // Dragged on the timeline: the middle moves it; the start edge trims
   // the head, starting the file later; the end edge sets its length.

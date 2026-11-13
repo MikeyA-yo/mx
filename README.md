@@ -185,7 +185,10 @@ A project is a row of clips. Add files with **+ Add clip** (or drop
 several on the window), reorder them in the clip bar, and pick one to
 edit it. With many clips, **Arrange** shows them all as a grid of
 pictures: drag one (or several picked with Ctrl or Shift) to its place,
-or send them to the start, the end or a numbered place. A clip splits at
+or send them to the start, the end or a numbered place. Beside the grid, a
+player watches the clip picked as it'll be cut and plays on through the
+clips after it (<kbd>Space</kbd>, <kbd>←</kbd> <kbd>→</kbd>); pointing at a picture skims
+what's kept of it. A clip splits at
 the playhead (<kbd>S</kbd>), or at every cut at once, into clips of the
 same file, one for each part kept, ready to be spread out. Each clip keeps its own cuts, transcript and titles in its own
 time, so reordering or recutting never strands a title; the frame,
